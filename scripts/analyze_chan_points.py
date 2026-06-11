@@ -1502,17 +1502,17 @@ ul {{ margin:0; padding-left:18px; }}
 def load_data(args):
     data_dir=Path(args.data_dir)
     if args.source in ("web", "auto"):
-        code,name,bars=fetch_stock_from_web(args.stock,"101",None)
+        code,name,bars,provider=fetch_stock_from_web(args.stock,"101",None)
         stock_code=f"{code} ({name})" if name else code
-        return stock_code,f"网络数据 ({code})",bars
+        return stock_code,f"{provider} ({code})",bars
     try:
         csv_path,stock_code=resolve_csv(args.stock,data_dir)
         bars=read_bars(csv_path)
         if args.source=="local": return stock_code,f"本地 CSV ({csv_path.name})",bars
     except SystemExit:
         if args.source=="local": raise
-        code,name,bars=fetch_stock_from_web(args.stock,"101",None)
-        return f"{code} ({name})" if name else code,f"网络数据 ({code})",bars
+        code,name,bars,provider=fetch_stock_from_web(args.stock,"101",None)
+        return f"{code} ({name})" if name else code,f"{provider} ({code})",bars
     return stock_code,f"本地 CSV ({csv_path.name})",bars
 
 
@@ -1563,7 +1563,7 @@ def fetch_intraday_frame(args, key, label, klt):
     secid, code, name = resolve_web_secid(args.stock)
     code, fetched_name, bars = fetch_kline(secid, klt, None)
     display_name = name or fetched_name
-    source = f"网络数据 ({code}, {label})"
+    source = f"东方财富 ({code}, {label})"
     stock_code = f"{code} ({display_name})" if display_name else code
     return stock_code, source, bars
 
