@@ -376,8 +376,8 @@ def fetch_stock_from_web(stock_query: str, klt: str = "101", limit: int = 500):
             errors.append(f"{provider}: {exc}")
     raise SystemExit("所有网络行情源均不可用：" + "；".join(errors))
 
-def fetch_stock_from_web_legacy(stock_query: str, klt: str = "101", limit: int = 500):
-    """保留旧逻辑用于对照；主流程不再调用。"""
+def fetch_stock_from_web_eastmoney_first_legacy(stock_query: str, klt: str = "101", limit: int = 500):
+    """保留旧的东方财富优先逻辑用于对照；主流程不再调用。"""
     query = stock_query.strip()
     normalized = normalize_stock_code(query)
     try:
