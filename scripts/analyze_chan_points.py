@@ -76,7 +76,8 @@ class PenStep:
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="缠论一二三类买卖点分析 + K线标注")
     p.add_argument("--stock", required=True, help="股票名称或代码")
-    p.add_argument("--source", default="auto", choices=["auto", "local", "web"])
+    p.add_argument("--source", default="web", choices=["auto", "local", "web"],
+                   help="数据来源；默认 web。auto 也按网络取数处理，local 仅用于显式调试本地 CSV")
     p.add_argument("--data-dir", default="/Users/josan/Desktop/czsc/Stock")
     p.add_argument("--out-dir", default="/Users/josan/Desktop/czsc/reports")
     p.add_argument("--chart-timeframe", default="auto", choices=["auto", "5m", "30m", "daily"],
@@ -267,13 +268,127 @@ def fetch_csindex_daily_akshare(query: str, limit: int = 500):
         raise SystemExit(f"akshare 中证指数数据不足40根K线 (实际{len(bars)})")
     return symbol, name or "中证1000", bars
 
+def fetch_a_daily_akshare(code: str, limit: Optional[int] = None):
+    normalized = normalize_stock_code(code)
+    m = re.fullmatch(r"(\d{6})\.(SH|SZ|BJ)", normalized)
+    if not m:
+        raise ValueError(f"不是可识别的 A 股代码: {code}")
+    try:
+        import akshare as ak
+    except ImportError as exc:
+        raise SystemExit("主网络行情接口不可用，且未安装 akshare，无法获取 A 股日线数据。") from exc
+    market_code = f"{m.group(2).lower()}{m.group(1)}"
+    df = ak.stock_zh_a_daily(symbol=market_code, start_date="19900101", end_date="20500101", adjust="qfq")
+    if df is None or len(df) == 0:
+        raise SystemExit(f"akshare 未返回 A 股日线数据 ({market_code})")
+    if limit and len(df) > limit:
+        df = df.tail(limit)
+    bars = []
+    for row in df.to_dict("records"):
+        try:
+            dt = str(row.get("date", "")).replace("-", "")[:8]
+            if not re.fullmatch(r"\d{8}", dt):
+                continue
+            open_ = float(row["open"])
+            high = float(row["high"])
+            low = float(row["low"])
+            close = float(row["close"])
+            if any(math.isnan(x) for x in (open_, high, low, close)):
+                continue
+            bars.append(Bar(normalized, dt, open_, high, low, close,
+                           float(row.get("volume", 0) or 0), float(row.get("amount", 0) or 0)))
+        except Exception:
+            continue
+    bars.sort(key=lambda x: x.trade_date)
+    bars = [b for b in bars if b.close > 0]
+    if len(bars) < 40:
+        raise SystemExit(f"akshare A 股数据不足40根K线 (实际{len(bars)})")
+    return normalized, "", bars
+
+def fetch_a_daily_tdx(code: str, limit: Optional[int] = None):
+    try:
+        import mootdx  # noqa: F401
+    except ImportError as exc:
+        raise RuntimeError("通达信历史行情接口不可用：当前环境未安装 mootdx/pytdx") from exc
+    raise RuntimeError("通达信历史行情接口尚未接入")
+
+def fetch_a_daily_ths(code: str, limit: Optional[int] = None):
+    try:
+        import akshare as ak  # noqa: F401
+    except ImportError as exc:
+        raise RuntimeError("同花顺历史行情接口不可用：当前环境未安装 akshare") from exc
+    raise RuntimeError("同花顺个股历史 K 线接口尚未接入")
+
 def fetch_stock_from_web(stock_query: str, klt: str = "101", limit: int = 500):
+    query = stock_query.strip()
+    normalized = normalize_stock_code(query)
+    if klt != "101":
+        secid = code_to_secid(normalized)
+        code, name, bars = fetch_kline(secid, klt, limit)
+        for b in bars: b.ts_code = f"{code} ({name})" if name else code
+        return code, name, bars, "东方财富"
+
+    try:
+        code_to_secid(normalized)
+        resolved_code = normalized
+        resolved_name = ""
+    except Exception:
+        if csindex_symbol_from_query(query):
+            resolved_code = query
+            resolved_name = ""
+        else:
+            search_query = normalized.replace(".HK","") if normalized.endswith(".HK") else query
+            results = eastsrch(search_query)
+            if not results: raise SystemExit(f"搜索不到「{query}」")
+            best = results[0]
+            resolved_code = normalize_stock_code(best["code"])
+            resolved_name = best.get("name","")
+
+    attempts = []
+    if normalize_stock_code(resolved_code).endswith((".SH", ".SZ", ".BJ")):
+        attempts.extend([
+            ("AKShare-新浪财经", lambda: fetch_a_daily_akshare(resolved_code, limit)),
+            ("东方财富", lambda: fetch_kline(code_to_secid(resolved_code), klt, limit)),
+            ("通达信", lambda: fetch_a_daily_tdx(resolved_code, limit)),
+            ("同花顺", lambda: fetch_a_daily_ths(resolved_code, limit)),
+        ])
+    elif normalize_stock_code(resolved_code).endswith(".HK"):
+        attempts.extend([
+            ("AKShare-港股", lambda: fetch_hk_daily_akshare(resolved_code, limit)),
+            ("东方财富", lambda: fetch_kline(code_to_secid(resolved_code), klt, limit)),
+        ])
+    elif csindex_symbol_from_query(query):
+        attempts.extend([
+            ("AKShare-中证指数", lambda: fetch_csindex_daily_akshare(query, limit)),
+            ("东方财富", lambda: fetch_kline(code_to_secid(resolved_code), klt, limit)),
+        ])
+    else:
+        attempts.append(("东方财富", lambda: fetch_kline(code_to_secid(resolved_code), klt, limit)))
+
+    errors = []
+    for provider, fetcher in attempts:
+        try:
+            code, name, bars = fetcher()
+            name = name or resolved_name
+            for b in bars: b.ts_code = f"{code} ({name})" if name else code
+            return code, name, bars, provider
+        except Exception as exc:
+            errors.append(f"{provider}: {exc}")
+    raise SystemExit("所有网络行情源均不可用：" + "；".join(errors))
+
+def fetch_stock_from_web_legacy(stock_query: str, klt: str = "101", limit: int = 500):
+    """保留旧逻辑用于对照；主流程不再调用。"""
     query = stock_query.strip()
     normalized = normalize_stock_code(query)
     try:
         secid = code_to_secid(normalized)
         return fetch_kline(secid, klt, limit)
     except Exception as direct_err:
+        if normalized.endswith((".SH", ".SZ", ".BJ")) and klt == "101":
+            try:
+                return fetch_a_daily_akshare(normalized, limit)
+            except Exception:
+                pass
         if normalized.endswith(".HK") and klt == "101":
             try:
                 return fetch_hk_daily_akshare(normalized, limit)
@@ -292,7 +407,11 @@ def fetch_stock_from_web(stock_query: str, klt: str = "101", limit: int = 500):
     try:
         code, name, bars = fetch_kline(secid, klt, limit)
     except Exception:
-        if normalize_stock_code(best["code"]).endswith(".HK") and klt == "101":
+        best_code = normalize_stock_code(best["code"])
+        if best_code.endswith((".SH", ".SZ", ".BJ")) and klt == "101":
+            code, name, bars = fetch_a_daily_akshare(best_code, limit)
+            name = name or best.get("name","")
+        elif best_code.endswith(".HK") and klt == "101":
             code, name, bars = fetch_hk_daily_akshare(best["code"], limit)
             name = name or best.get("name","")
         else:
@@ -1382,7 +1501,7 @@ ul {{ margin:0; padding-left:18px; }}
 
 def load_data(args):
     data_dir=Path(args.data_dir)
-    if args.source=="web":
+    if args.source in ("web", "auto"):
         code,name,bars=fetch_stock_from_web(args.stock,"101",None)
         stock_code=f"{code} ({name})" if name else code
         return stock_code,f"网络数据 ({code})",bars
