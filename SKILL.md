@@ -1,6 +1,6 @@
 ---
 name: chan-stock-buy-sell-point
-description: 基于缠论技术分析和日线 OHLCV 行情数据，判断一只股票当前是否处于缠论一类、二类、三类买点或卖点，并生成详细 HTML 报告。支持本地 Stock CSV 和网络获取两种数据来源，可分析 A 股、港股等。用户只要要求判断"股票是否是一二三类买卖点""缠论买卖点""一买/二买/三买/一卖/二卖/三卖""按缠中说禅分析某股票当前买卖点"，即使没有明确说使用本 skill，也应使用本 skill。输入通常是股票名称或代码，输出必须包含详细证据、反证、级别说明、结论置信度和 HTML 文件路径。
+description: 基于缠论技术分析和日线 OHLCV 行情数据，判断一只股票当前是否处于缠论一类、二类、三类买点或卖点，并生成详细 HTML 报告。主要使用网络获取数据来源，可分析 A 股、港股等。用户只要要求判断"股票是否是一二三类买卖点""缠论买卖点""一买/二买/三买/一卖/二卖/三卖""按缠中说禅分析某股票当前买卖点"，即使没有明确说使用本 skill，也应使用本 skill。输入通常是股票名称或代码，输出必须包含详细证据、反证、级别说明、结论置信度和 HTML 文件路径。
 agent_created: true
 ---
 
@@ -11,18 +11,12 @@ agent_created: true
 本 skill 为分析辅助工具，不构成投资建议。需明确说明数据局限性和分析的不确定性。在没有完整多级别证据链的情况下，切勿将买卖点判定为"确认"。
 
 ## 数据来源
-
-支持两种数据来源，通过 `--source` 参数切换：
-
-- **local**：仅读取本地 Stock CSV 文件（路径 `/Users/josan/Desktop/czsc/Stock/*.csv`），仅限 A 股（.SH / .SZ）。
-- **web**：通过网络从东方财富 API 获取日线行情，无需 API Key，支持 A 股、港股等市场。
-- **auto**（默认）：优先查找本地 CSV，找不到则自动回退到网络获取。
-
-CSV 文件按股票代码命名，如 `600966.SH.csv`，包含日线 OHLCV 字段：`ts_code, trade_date, open, high, low, close, vol, amount`。
+- **web（默认且唯一推荐）**：通过网络从东方财富、通达信、同花顺 API 获取行情，无需 API Key，支持 A 股、港股等市场。
+- 常规分析不得依赖本地 `Stock/` CSV 缓存，避免读到陈旧数据。只有用户明确要求调试本地数据时，才可显式使用 `--source local`。
 
 ## 股票解析
 
-如果用户提供的是股票中文名称（如"腾讯控股"）且启用了网络来源（auto 或 web），系统会自动通过东方财富 API 搜索名称并解析为代码。如果仅有本地数据源且无法匹配名称，则询问用户股票代码。
+如果用户提供的是股票中文名称（如"腾讯控股"），系统会自动通过网络接口搜索名称并解析为代码。若网络搜索无法唯一匹配，再询问用户提供股票代码。
 
 股票代码支持以下格式：
 - A 股：`600519.SH`、`000001.SZ`、`688001.SH` 或纯数字 `600519`
@@ -66,40 +60,32 @@ CSV 文件按股票代码命名，如 `600966.SH.csv`，包含日线 OHLCV 字�
 
 1. **解析股票**：
    - 接受股票代码或股票名称。
-   - 优先使用本地 CSV 文件（`Stock/` 目录）。
-   - 如果给出中文名称且本地未找到匹配，则使用网络来源搜索并获取数据（当来源为 auto 或 web 时）。
-   - 如果只有本地数据源且名称无法映射，则询问用户股票代码。
+   - 始终使用网络来源搜索并获取行情数据。
+   - 不读取本地 CSV 缓存，除非用户明确要求调试本地数据。
+   - 如果名称无法通过网络唯一匹配，则询问用户股票代码。
 
 2. **运行分析脚本**：
 
 ```bash
-# 使用自动来源并生成多级别切换报告（默认优先 5 分钟）：
+# 使用网络来源并生成多级别切换报告（默认优先 5 分钟）：
 python3 /Users/josan/.workbuddy/skills/chan-stock-buy-sell-point/scripts/analyze_chan_points.py \
   --stock "<股票名称或代码>" \
-  --source auto \
-  --data-dir /Users/josan/Desktop/czsc/Stock \
+  --source web \
   --out-dir /Users/josan/Desktop/czsc/reports \
   --chart-timeframe auto
 
-# 强制使用网络获取（适用于港股或其他不在本地的股票）：
+# 指定股票名称（名称自动解析）：
 python3 /Users/josan/.workbuddy/skills/chan-stock-buy-sell-point/scripts/analyze_chan_points.py \
   --stock "腾讯控股" \
   --source web \
   --out-dir /Users/josan/Desktop/czsc/reports
 
-# 仅使用本地日线数据：
+# 若网络分钟线不稳定，可只生成网络日线报告：
 python3 /Users/josan/.workbuddy/skills/chan-stock-buy-sell-point/scripts/analyze_chan_points.py \
-  --stock "600519" \
-  --source local \
-  --data-dir /Users/josan/Desktop/czsc/Stock \
+  --stock "000001" \
+  --source web \
   --out-dir /Users/josan/Desktop/czsc/reports \
   --chart-timeframe daily
-
-# 指定股票名称和自动来源（名称自动解析）：
-python3 /Users/josan/.workbuddy/skills/chan-stock-buy-sell-point/scripts/analyze_chan_points.py \
-  --stock "腾讯控股" \
-  --source auto \
-  --out-dir /Users/josan/Desktop/czsc/reports
 ```
 
 3. **读取脚本输出**：从命令行输出中提取生成的 JSON 摘要和 HTML 路径。
@@ -158,7 +144,7 @@ HTML 报告当前用于基础标注稳定性测试，应聚焦 K 线包含处理
 ## 分析纪律
 
 - 始终区分"确认"与"候选"。当前日线数据通常只能支持"候选/近似确认"，因为缺乏更低级别的确认。
-- 提及数据来源和分析级别。如果使用网络数据，注明来源（东方财富）。如果仅有日线数据，则说明这是"日线级别近似分析"；真正的缠论确认往往需要更低级别（如 30m/5m）进行区间套验证。
+- 提及数据来源和分析级别。默认使用网络数据，需注明来源接口或报告中的来源标签。如果仅有日线数据，则说明这是"日线级别近似分析"；真正的缠论确认往往需要更低级别（如 30m/5m）进行区间套验证。
 - 使用具体价格水平定义失效条件：最新中枢的 `ZG/ZD`、近期转折高低点、一买/一卖的候选低点/高点。
 - 不使用绝对化的盈利承诺。将理论中的绝对断言替换为实际措辞，如"按该级别结构，后续应重点观察……"。
 - 如果数据陈旧，需在报告和最终回复中注明最新的 `trade_date`。
@@ -183,10 +169,10 @@ HTML 报告当前用于基础标注稳定性测试，应聚焦 K 线包含处理
 帮我看一下贵州茅台是不是一买
 ```
 
-使用 auto 来源（本地 CSV 可用）：
+使用网络来源：
 
 ```text
-已从本地数据读取贵州茅台，日线级别当前...
+已通过网络获取贵州茅台行情，日线级别当前...
 ```
 
 输入：
@@ -195,7 +181,7 @@ HTML 报告当前用于基础标注稳定性测试，应聚焦 K 线包含处理
 分析腾讯控股是不是二三买
 ```
 
-使用 auto/web 来源（网络回退）：
+使用网络来源：
 
 ```text
 通过网络获取腾讯控股(00700.HK)日线数据，日线级别当前...
