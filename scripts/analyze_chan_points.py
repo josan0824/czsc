@@ -1062,20 +1062,17 @@ def chan_analysis(bars, merged, args):
 def _make_svg_chart(stock_code, bars, pens, raw_fractals, centers, segments, timeframe_label="日线", chart_id="main"):
     """用 SVG viewBox 实现可缩放/拖拽的 K 线分型标注图。
 
-    当前 HTML 报告聚焦 K 线包含处理和原始分型验证，所以图中只绘制：
+    当前 HTML 报告聚焦 K 线包含处理、原始分型和笔验证，所以图中绘制：
     - K 线
     - 顶分型标记：蓝色 ▼
     - 底分型标记：橙色 ▲
+    - 笔：连接相邻有效分型端点的折线
     """
     W, H = 960, 520  # viewBox 初始宽高
     LM, TM, BM, RM = 55, 8, 28, 15  # 边距
     BW = 8  # 每根K线宽度（px）
     cid = re.sub(r"[^A-Za-z0-9_-]+", "_", chart_id)
     pb = bars
-    # 限制最大渲染条数（保留足够的数据用于缩放/拖拽）
-    MAX_RENDER_BARS = 800
-    if len(pb) > MAX_RENDER_BARS:
-        pb = pb[-MAX_RENDER_BARS:]
     if len(pb) < 2:
         return ""
 
@@ -1093,8 +1090,11 @@ def _make_svg_chart(stock_code, bars, pens, raw_fractals, centers, segments, tim
 
     # 日期 → X 坐标映射（用于分型的日期定位）
     dt_map = {}
+    day_map = {}
     for i, b in enumerate(pb):
-        dt_map[b.trade_date] = LM + i * BW + BW / 2
+        x = LM + i * BW + BW / 2
+        dt_map[b.trade_date] = x
+        day_map[b.trade_date[:8]] = x
     # 获取显示范围内的最早和最晚日期
     first_date = pb[0].trade_date[:8]
     last_date = pb[-1].trade_date[:8]
@@ -1102,11 +1102,14 @@ def _make_svg_chart(stock_code, bars, pens, raw_fractals, centers, segments, tim
         if d in dt_map:
             return dt_map[d]
         # 模糊匹配（仅比较 YYYYMMDD 部分）
-        d8 = d[:8]
-        for k, v in dt_map.items():
-            if k[:8] == d8:
-                return v
+        d8 = str(d)[:8]
+        if d8 in day_map:
+            return day_map[d8]
         return LM
+
+    def visible_date(d):
+        d8 = str(d)[:8]
+        return first_date <= d8 <= last_date and d8 in day_map
 
     # 过滤：只保留在显示日期范围内的原始分型
     visible_raw = [p for p in raw_fractals if first_date <= p.date[:8] <= last_date]
@@ -1123,6 +1126,7 @@ def _make_svg_chart(stock_code, bars, pens, raw_fractals, centers, segments, tim
             ds = dt
         bar_data.append({"i": i, "dt": dt, "o": b.open, "h": b.high, "l": b.low, "c": b.close, "v": b.vol, "x": round(LM + i * BW + BW / 2, 1)})
     bar_json = json.dumps(bar_data, ensure_ascii=False)
+    pen_data = []
 
     total_bars = len(pb)
     def_offset = max(0, total_bars - 80)
@@ -1158,6 +1162,32 @@ def _make_svg_chart(stock_code, bars, pens, raw_fractals, centers, segments, tim
         else:
             svg += f'<rect x="{x:.1f}" y="{bt:.1f}" width="{BW - 1}" height="{max(1, bb - bt):.1f}" fill="{clr}" rx="0"/>'
 
+    # 笔：相邻有效分型端点连线
+    visible_pen_pairs = []
+    for a, b in zip(pens, pens[1:]):
+        if visible_date(a.date) and visible_date(b.date):
+            visible_pen_pairs.append((a, b))
+    for pen_idx, (a, b) in enumerate(visible_pen_pairs):
+        x1, y1 = xd(a.date), yp(a.price)
+        x2, y2 = xd(b.date), yp(b.price)
+        direction = "up" if b.price >= a.price else "down"
+        stroke = "#12b76a" if direction == "up" else "#d92d20"
+        pen_data.append({
+            "i": pen_idx,
+            "start": a.date,
+            "end": b.date,
+            "x1": round(x1, 1),
+            "y1": round(y1, 1),
+            "x2": round(x2, 1),
+            "y2": round(y2, 1),
+            "direction": direction,
+        })
+        svg += (
+            f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" '
+            f'stroke="{stroke}" stroke-width="1.8" opacity="0.82" stroke-linecap="round"/>'
+        )
+    pen_json = json.dumps(pen_data, ensure_ascii=False)
+
     # 所有原始分型标注（参照参考文档：顶分型蓝色▼、底分型橙色▲）
     for p in visible_raw:
         x = xd(p.date)
@@ -1171,6 +1201,7 @@ def _make_svg_chart(stock_code, bars, pens, raw_fractals, centers, segments, tim
             svg += f'<text x="{x:.1f}" y="{yp(p.price) + 18:.1f}" text-anchor="middle" fill="#444" font-size="9" dominant-baseline="top">{p.price:.1f}</text>'
 
     svg += f'<line id="chart-selected-line-{cid}" x1="{LM}" y1="{TM}" x2="{LM}" y2="{H - BM}" stroke="#1f6f8b" stroke-width="1.5" stroke-dasharray="4 3" opacity="0.95" style="display:none;pointer-events:none;"/>'
+    svg += f'<line id="chart-selected-pen-{cid}" x1="{LM}" y1="{TM}" x2="{LM}" y2="{H - BM}" stroke="#7a5af8" stroke-width="4" opacity="0.95" stroke-linecap="round" style="display:none;pointer-events:none;"/>'
     svg += '</g></svg>'
 
     # ── 交互 HTML（viewBox 缩放/拖拽） ──
@@ -1193,6 +1224,7 @@ def _make_svg_chart(stock_code, bars, pens, raw_fractals, centers, segments, tim
 try {{
 var chartData = {{
   bars: {bar_json},
+  pens: {pen_json},
   totalBars: {total_bars}
 }};
 
@@ -1200,6 +1232,7 @@ var svg = document.getElementById('chan-chart-svg-{cid}');
 var wrap = document.getElementById('chc-{cid}');
 var tip = document.getElementById('chtooltip-{cid}');
 var selectedLine = document.getElementById('chart-selected-line-{cid}');
+var selectedPen = document.getElementById('chart-selected-pen-{cid}');
 
 var LM = {LM}, BW = {BW}, TM = {TM}, BM = {BM}, RM = {RM};
 var CH = {H};
@@ -1214,12 +1247,20 @@ var minViewW = Math.max(minVisibleBars * BW, 180);
 var maxViewW = Math.max(totalWidth, minViewW);
 var dateToBar = {{}};
 
-function normalizeDate(value) {{
-  return String(value || '').replace(/[^0-9]/g, '').slice(0, 8);
+function digitsOnly(value) {{
+  return String(value || '').replace(/[^0-9]/g, '');
+}}
+
+function normalizeKey(value) {{
+  var digits = digitsOnly(value);
+  return digits.length >= 12 ? digits.slice(0, 12) : digits.slice(0, 8);
 }}
 
 for (var di = 0; di < chartData.bars.length; di++) {{
-  dateToBar[normalizeDate(chartData.bars[di].dt)] = di;
+  var fullKey = normalizeKey(chartData.bars[di].dt);
+  var dayKey = digitsOnly(chartData.bars[di].dt).slice(0, 8);
+  dateToBar[fullKey] = di;
+  if (dayKey && dateToBar[dayKey] === undefined) dateToBar[dayKey] = di;
 }}
 
 function chartRect() {{
@@ -1334,26 +1375,65 @@ function showSelectedLine(idx) {{
   selectedLine.setAttribute('x1', x.toFixed(1));
   selectedLine.setAttribute('x2', x.toFixed(1));
   selectedLine.style.display = 'block';
+  if (selectedPen) selectedPen.style.display = 'none';
+}}
+
+function showSelectedPen(pen) {{
+  if (!selectedPen || !pen) return;
+  selectedPen.setAttribute('x1', Number(pen.x1).toFixed(1));
+  selectedPen.setAttribute('y1', Number(pen.y1).toFixed(1));
+  selectedPen.setAttribute('x2', Number(pen.x2).toFixed(1));
+  selectedPen.setAttribute('y2', Number(pen.y2).toFixed(1));
+  selectedPen.style.display = 'block';
+  if (selectedLine) selectedLine.style.display = 'none';
+}}
+
+function markSelectedRow(row) {{
+  var panel = wrap.closest('.timeframe-panel') || document;
+  panel.querySelectorAll('tr.chart-linked-row.selected-row').forEach(function(r) {{
+    r.classList.remove('selected-row');
+  }});
+  if (row) row.classList.add('selected-row');
 }}
 
 function focusChartDate(value, row) {{
-  var date = normalizeDate(value);
+  var date = normalizeKey(value);
   var idx = dateToBar[date];
   if (idx === undefined) return;
   var x = chartData.bars[idx].x;
   originX = x - viewW * 0.5;
   updateViewBox();
   showSelectedLine(idx);
-  var panel = wrap.closest('.timeframe-panel') || document;
-  panel.querySelectorAll('tr.chart-linked-row.selected-row').forEach(function(r) {{
-    r.classList.remove('selected-row');
-  }});
-  if (row) row.classList.add('selected-row');
+  markSelectedRow(row);
   var rect = svg.getBoundingClientRect();
   var cx = rect.left + (x - originX) / viewW * rect.width;
   var cy = rect.top + Math.min(rect.height - 20, Math.max(24, rect.height * 0.24));
   showTip(idx, cx, cy);
   wrap.scrollIntoView({{ block: 'nearest', inline: 'nearest', behavior: 'smooth' }});
+}}
+
+function focusChartPen(row) {{
+  var penIndex = parseInt(row.getAttribute('data-pen-index'), 10);
+  var pen = chartData.pens[penIndex];
+  if (!pen) return false;
+  var startIdx = dateToBar[normalizeKey(pen.start)];
+  var endIdx = dateToBar[normalizeKey(pen.end)];
+  if (startIdx === undefined || endIdx === undefined) return false;
+  var x1 = Number(pen.x1), x2 = Number(pen.x2);
+  var span = Math.abs(x2 - x1) + BW * 16;
+  if (span > viewW) {{
+    viewW = Math.max(minViewW, Math.min(maxViewW, span * 1.15));
+  }}
+  originX = (x1 + x2) / 2 - viewW * 0.5;
+  updateViewBox();
+  showSelectedPen(pen);
+  markSelectedRow(row);
+  var rect = svg.getBoundingClientRect();
+  var cx = rect.left + (x2 - originX) / viewW * rect.width;
+  var cy = rect.top + (Number(pen.y2) - originY) / viewH * rect.height;
+  showTip(endIdx, cx, cy);
+  wrap.scrollIntoView({{ block: 'nearest', inline: 'nearest', behavior: 'smooth' }});
+  return true;
 }}
 
 var isPanning = false, panStartX = 0, panStartY = 0, panStartOrgX = 0, panStartOrgY = 0;
@@ -1396,6 +1476,11 @@ window.addEventListener('mouseup', function() {{
 wrap.addEventListener('mouseleave', function() {{ tip.style.display = 'none'; }});
 
 document.addEventListener('click', function(e) {{
+  var penRow = e.target.closest('tr[data-pen-index]');
+  if (penRow && wrap.closest('.timeframe-panel.active')) {{
+    focusChartPen(penRow);
+    return;
+  }}
   var row = e.target.closest('tr[data-chart-date]');
   if (!row || !wrap.closest('.timeframe-panel.active')) return;
   focusChartDate(row.getAttribute('data-chart-date'), row);
@@ -1501,6 +1586,7 @@ def build_report_panel(stock_code, frame):
     bars = frame.get("bars") or []
     merged_bars = frame.get("merged") or []
     raw_fractals = frame.get("raw") or []
+    pens = frame.get("pens") or []
     fractal_records = frame.get("fractal_records") or raw_fractals
 
     def price_with_date(value, date):
@@ -1541,13 +1627,28 @@ def build_report_panel(stock_code, frame):
         )
     mbrows = "".join(mb_lines)
 
-    svg = _make_svg_chart(stock_code, bars, [], raw_fractals, [], [], label, key) if len(bars) > 1 else ""
+    pen_lines = []
+    for i, (start, end) in enumerate(zip(pens, pens[1:]), 1):
+        direction = "向上笔" if end.price >= start.price else "向下笔"
+        row_classes = "chart-linked-row pen-row"
+        pen_lines.append(
+            f"<tr class=\"{row_classes}\" data-chart-date=\"{end.date}\" data-pen-index=\"{i-1}\" data-pen-start=\"{start.date}\" data-pen-end=\"{end.date}\">"
+            f"<td>{i}</td><td>{direction}</td>"
+            f"<td>{fmt_date(start.date)}</td><td>{'顶分型' if start.kind=='top' else '底分型'}</td><td>{safe(start.price)}</td>"
+            f"<td>{fmt_date(end.date)}</td><td>{'顶分型' if end.kind=='top' else '底分型'}</td><td>{safe(end.price)}</td>"
+            f"<td>{max(0, end.index - start.index)}</td><td>{safe(abs(end.price - start.price))}</td></tr>"
+        )
+    penrows = "".join(pen_lines)
+
+    svg = _make_svg_chart(stock_code, bars, pens, raw_fractals, [], [], label, key) if len(bars) > 1 else ""
     chart_section = f'''
 <section class="chart-section">
 <h2>{html.escape(label)} K 线分型图</h2>
 <div class="legend">
 <span><span class="dot" style="background:#1f6f8b"></span>顶分型(▼)</span>
 <span><span class="dot" style="background:#f79009"></span>底分型(▲)</span>
+<span><span class="line-sample line-up"></span>向上笔</span>
+<span><span class="line-sample line-down"></span>向下笔</span>
 </div>
 {svg if svg else '<p class="note">当前级别没有足够K线生成图表。</p>'}
 </section>'''
@@ -1561,13 +1662,21 @@ def build_report_panel(stock_code, frame):
 <tbody>{mbrows if mbrows else '<tr><td colspan="8">无包含处理数据</td></tr>'}</tbody>
 </table></div>
 </details>
-{chart_section}
-<details open>
+<details>
 <summary>原始分型列表（候选{len(fractal_records)}个，有效{len(raw_fractals)}个）</summary>
 <div class="table-wrap fractal-table-wrap">
 <table>
 <thead><tr><th>#</th><th>日期</th><th>类型</th><th>分型价格</th><th>最高</th><th>最低</th><th>状态</th><th>过滤原因</th></tr></thead>
 <tbody>{frows if frows else '<tr><td colspan="8">未识别到足够分型</td></tr>'}</tbody>
+</table></div>
+</details>
+{chart_section}
+<details open>
+<summary>笔列表（{max(0, len(pens)-1)}笔）</summary>
+<div class="table-wrap pen-table-wrap">
+<table>
+<thead><tr><th>#</th><th>方向</th><th>起点日期</th><th>起点类型</th><th>起点价格</th><th>终点日期</th><th>终点类型</th><th>终点价格</th><th>K线间隔</th><th>价差</th></tr></thead>
+<tbody>{penrows if penrows else '<tr><td colspan="10">未构造出足够的笔</td></tr>'}</tbody>
 </table></div>
 </details>'''
 
@@ -1634,6 +1743,7 @@ details .table-wrap {{ padding:0 20px 18px; }}
 .table-wrap {{ overflow-x:auto; -webkit-overflow-scrolling:touch; max-width:100%; }}
 .merge-table-wrap {{ max-height:546px; overflow:auto; }}
 .fractal-table-wrap {{ max-height:366px; overflow:auto; }}
+.pen-table-wrap {{ max-height:366px; overflow:auto; }}
 table {{ width:100%; border-collapse:collapse; font-size:13px; }}
 th,td {{ border-bottom:1px solid var(--line); padding:6px 8px; text-align:left; vertical-align:top; white-space:nowrap; }}
 th {{ background:#f2f4f7; font-weight:700; position:sticky; top:0; }}
@@ -1653,6 +1763,9 @@ ul {{ margin:0; padding-left:18px; }}
 .legend {{ display:flex; gap:16px; flex-wrap:wrap; margin-bottom:8px; font-size:13px; }}
 .legend span {{ display:inline-flex; align-items:center; gap:4px; }}
 .legend .dot {{ display:inline-block; width:12px; height:12px; border-radius:50%; }}
+.line-sample {{ width:22px; height:0; display:inline-block; border-top:3px solid; border-radius:3px; }}
+.line-up {{ border-color:#12b76a; }}
+.line-down {{ border-color:#d92d20; }}
 .chan-chart-shell {{ position:relative; border-radius:6px; background:#fafafa; -webkit-user-select:none; user-select:none; max-width:100%; }}
 .chart-toolbar {{ display:flex; gap:6px; padding:6px 0; align-items:center; flex-wrap:wrap; }}
 .chart-toolbar button {{ min-width:34px; height:30px; padding:0 10px; border:1px solid #d9dee7; border-radius:4px; background:#fff; color:var(--ink); cursor:pointer; font-size:15px; line-height:1; }}
