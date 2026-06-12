@@ -197,6 +197,36 @@ def resolve_web_secid(stock_query: str) -> Tuple[str, str, str]:
     best = results[0]
     return code_to_secid(best["code"]), best["code"], best.get("name","")
 
+def lookup_stock_name(code: str, query: str = "") -> str:
+    known = {
+        "000001.SZ": "平安银行",
+        "SH000001": "上证指数",
+        "SZ399001": "深证成指",
+        "SZ399006": "创业板指",
+        "SH000688": "科创50",
+        "399852": "中证1000",
+        "000852": "中证1000",
+    }
+    if query and not re.fullmatch(r"[A-Za-z0-9.]+", query.strip()):
+        if is_index_query(query) or re.search(r"[\u4e00-\u9fff]", query):
+            return query.strip()
+    normalized = normalize_stock_code(code)
+    raw = str(code).strip().upper().replace(" ", "")
+    for key in (raw, normalized, normalized.replace(".HK", ""), raw.replace(".", "")):
+        if key in known:
+            return known[key]
+    try:
+        search_code = normalized.replace(".HK", "") if normalized.endswith(".HK") else normalized[:6]
+        results = eastsrch(search_code)
+        for item in results:
+            item_code = str(item.get("code", "")).upper()
+            quote_id = str(item.get("quote_id", "")).upper()
+            if item_code == search_code.upper() or item_code == normalized[:6] or quote_id.endswith(search_code.upper()):
+                return str(item.get("name", "") or "")
+    except Exception:
+        pass
+    return ""
+
 def fetch_kline(secid: str, klt: str = "101", limit: Optional[int] = None):
     if not HAS_REQUESTS: raise SystemExit("需要 requests 库")
     url = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
@@ -581,7 +611,7 @@ def fetch_stock_from_web(stock_query: str, klt: str = "101", limit: int = 500):
     for provider, fetcher in attempts:
         try:
             code, name, bars = fetcher()
-            name = name or resolved_name
+            name = name or resolved_name or lookup_stock_name(code, query)
             for b in bars: b.ts_code = f"{code} ({name})" if name else code
             return code, name, bars, provider
         except Exception as exc:
@@ -746,14 +776,14 @@ def filter_fractals_by_occupied_bars(candidates: List[Pivot]) -> List[Pivot]:
                 pivots.append(p)
             else:
                 p.valid = False
-                p.filter_reason = f"顶分型最低{p.low:.2f}未高于前一底分型最高{last.high:.2f}，区间重叠"
+                p.filter_reason = f"顶分型最低{p.low:.2f}未高于前一底分型{fmt_date(last.date)}最高{last.high:.2f}，区间重叠"
             continue
         if last.kind == "top" and p.kind == "bottom":
             if p.high < last.low:
                 pivots.append(p)
             else:
                 p.valid = False
-                p.filter_reason = f"底分型最高{p.high:.2f}未低于前一顶分型最低{last.low:.2f}，区间重叠"
+                p.filter_reason = f"底分型最高{p.high:.2f}未低于前一顶分型{fmt_date(last.date)}最低{last.low:.2f}，区间重叠"
             continue
     return candidates
 
@@ -923,8 +953,22 @@ def macd(vals):
     return dif,dea,hist
 
 def fmt_date(v):
-    if re.fullmatch(r"\d{8}",v): return f"{v[:4]}-{v[4:6]}-{v[6:]}"
-    return v
+    s = str(v or "")
+    digits = re.sub(r"\D", "", s)
+    if len(digits) >= 12:
+        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]} {digits[8:10]}:{digits[10:12]}"
+    if len(digits) == 8:
+        return f"{digits[:4]}-{digits[4:6]}-{digits[6:]}"
+    return s
+
+def fmt_cn_datetime(v):
+    s = str(v or "")
+    digits = re.sub(r"\D", "", s)
+    if len(digits) >= 12:
+        return f"{digits[:4]}年{int(digits[4:6])}月{int(digits[6:8])}日 {digits[8:10]}:{digits[10:12]}"
+    if len(digits) == 8:
+        return f"{digits[:4]}年{int(digits[4:6])}月{int(digits[6:])}日"
+    return s
 
 def area_between(hist,start,end,sign):
     s,e=max(0,start),min(len(hist)-1,end)
@@ -1059,7 +1103,7 @@ def chan_analysis(bars, merged, args):
 
 # ───────── 内联SVG K线图（viewBox 缩放/拖拽） ─────────
 
-def _make_svg_chart(stock_code, bars, pens, raw_fractals, centers, segments, timeframe_label="日线", chart_id="main"):
+def _make_svg_chart(stock_code, bars, pens, raw_fractals, centers, segments, timeframe_label="日线", chart_id="main", merged_bars=None):
     """用 SVG viewBox 实现可缩放/拖拽的 K 线分型标注图。
 
     当前 HTML 报告聚焦 K 线包含处理、原始分型和笔验证，所以图中绘制：
@@ -1073,6 +1117,7 @@ def _make_svg_chart(stock_code, bars, pens, raw_fractals, centers, segments, tim
     BW = 8  # 每根K线宽度（px）
     cid = re.sub(r"[^A-Za-z0-9_-]+", "_", chart_id)
     pb = bars
+    merged_bars = merged_bars or []
     if len(pb) < 2:
         return ""
 
@@ -1112,20 +1157,33 @@ def _make_svg_chart(stock_code, bars, pens, raw_fractals, centers, segments, tim
         return first_date <= d8 <= last_date and d8 in day_map
 
     # 过滤：只保留在显示日期范围内的原始分型
-    visible_raw = [p for p in raw_fractals if first_date <= p.date[:8] <= last_date]
+    visible_raw = [(row_num, p) for row_num, p in enumerate(raw_fractals, 1) if first_date <= p.date[:8] <= last_date]
 
     # 内置 K 线数据为 JSON（用于 JS 交互）
     bar_data = []
+    bar_order = {}
     for i, b in enumerate(pb):
         dt = b.trade_date
-        if len(dt) >= 12:
-            ds = f"{dt[:4]}\u5e74{int(dt[4:6])}\u6708{int(dt[6:8])}\u65e5 {dt[8:10]}:{dt[10:12]}"
-        elif len(dt) == 8:
-            ds = f"{dt[:4]}\u5e74{int(dt[4:6])}\u6708{int(dt[6:])}\u65e5"
-        else:
-            ds = dt
-        bar_data.append({"i": i, "dt": dt, "o": b.open, "h": b.high, "l": b.low, "c": b.close, "v": b.vol, "x": round(LM + i * BW + BW / 2, 1)})
+        bar_order[dt] = i
+        ds = fmt_cn_datetime(dt)
+        bar_data.append({"i": i, "dt": dt, "display_dt": ds, "o": b.open, "h": b.high, "l": b.low, "c": b.close, "v": b.vol, "x": round(LM + i * BW + BW / 2, 1)})
     bar_json = json.dumps(bar_data, ensure_ascii=False)
+    fractal_data = []
+    for row_num, p in visible_raw:
+        highlight_dates = []
+        for mi in range(max(0, p.index - 1), min(len(merged_bars), p.index + 2)):
+            mb = merged_bars[mi]
+            highlight_dates.extend(mb.absorbed_dates or [])
+            highlight_dates.append(mb.date)
+        highlight_dates = sorted(set(highlight_dates), key=lambda d: bar_order.get(d, 10**9))
+        fractal_data.append({
+            "row": row_num,
+            "date": p.date,
+            "kind": p.kind,
+            "valid": bool(getattr(p, "valid", True)),
+            "dates": highlight_dates,
+        })
+    fractal_json = json.dumps(fractal_data, ensure_ascii=False)
     pen_data = []
 
     total_bars = len(pb)
@@ -1162,6 +1220,21 @@ def _make_svg_chart(stock_code, bars, pens, raw_fractals, centers, segments, tim
         else:
             svg += f'<rect x="{x:.1f}" y="{bt:.1f}" width="{BW - 1}" height="{max(1, bb - bt):.1f}" fill="{clr}" rx="0"/>'
 
+    # 被包含处理掉的原始 K 线：保留原 K 线显示，并叠加浅红虚线框用于校对包含关系。
+    absorbed_date_set = set()
+    for mb in merged_bars:
+        absorbed_date_set.update(mb.absorbed_dates or [])
+    for i, b in enumerate(pb):
+        if b.trade_date not in absorbed_date_set:
+            continue
+        x = LM + i * BW - 1
+        y = yp(b.high) - 1
+        h = max(3, yp(b.low) - yp(b.high) + 2)
+        svg += (
+            f'<rect x="{x:.1f}" y="{y:.1f}" width="{BW + 1}" height="{h:.1f}" '
+            f'fill="none" stroke="#d92d20" stroke-width="1.2" stroke-dasharray="3 2" opacity="0.85" rx="1"/>'
+        )
+
     # 笔：相邻有效分型端点连线
     visible_pen_pairs = []
     for a, b in zip(pens, pens[1:]):
@@ -1188,20 +1261,29 @@ def _make_svg_chart(stock_code, bars, pens, raw_fractals, centers, segments, tim
         )
     pen_json = json.dumps(pen_data, ensure_ascii=False)
 
-    # 所有原始分型标注（参照参考文档：顶分型蓝色▼、底分型橙色▲）
-    for p in visible_raw:
+    # 所有候选分型标注：有效分型用实心三角，过滤分型用虚线空心三角，便于校对过滤规则。
+    for row_num, p in visible_raw:
         x = xd(p.date)
         if x < LM:
             continue
+        valid = getattr(p, "valid", True)
+        marker_attrs = f'class="chart-fractal-marker" data-fractal-row="{row_num}" style="cursor:pointer;"'
         if p.kind == "top":
-            svg += f'<polygon points="{x:.1f},{yp(p.price):.1f} {x - 4:.1f},{yp(p.price) - 8:.1f} {x + 4:.1f},{yp(p.price) - 8:.1f}" fill="#1f6f8b"/>'
-            svg += f'<text x="{x:.1f}" y="{yp(p.price) - 10:.1f}" text-anchor="middle" fill="#444" font-size="9" dominant-baseline="bottom">{p.price:.1f}</text>'
+            if valid:
+                svg += f'<polygon {marker_attrs} points="{x:.1f},{yp(p.price):.1f} {x - 4:.1f},{yp(p.price) - 8:.1f} {x + 4:.1f},{yp(p.price) - 8:.1f}" fill="#1f6f8b"/>'
+            else:
+                svg += f'<polygon {marker_attrs} points="{x:.1f},{yp(p.price):.1f} {x - 4:.1f},{yp(p.price) - 8:.1f} {x + 4:.1f},{yp(p.price) - 8:.1f}" fill="none" stroke="#1f6f8b" stroke-width="1.3" stroke-dasharray="2 2"/>'
+            svg += f'<text {marker_attrs} x="{x:.1f}" y="{yp(p.price) - 10:.1f}" text-anchor="middle" fill="{"#444" if valid else "#9aa4b2"}" font-size="9" dominant-baseline="bottom">{p.price:.1f}</text>'
         else:
-            svg += f'<polygon points="{x:.1f},{yp(p.price):.1f} {x - 4:.1f},{yp(p.price) + 8:.1f} {x + 4:.1f},{yp(p.price) + 8:.1f}" fill="#f79009"/>'
-            svg += f'<text x="{x:.1f}" y="{yp(p.price) + 18:.1f}" text-anchor="middle" fill="#444" font-size="9" dominant-baseline="top">{p.price:.1f}</text>'
+            if valid:
+                svg += f'<polygon {marker_attrs} points="{x:.1f},{yp(p.price):.1f} {x - 4:.1f},{yp(p.price) + 8:.1f} {x + 4:.1f},{yp(p.price) + 8:.1f}" fill="#f79009"/>'
+            else:
+                svg += f'<polygon {marker_attrs} points="{x:.1f},{yp(p.price):.1f} {x - 4:.1f},{yp(p.price) + 8:.1f} {x + 4:.1f},{yp(p.price) + 8:.1f}" fill="none" stroke="#f79009" stroke-width="1.3" stroke-dasharray="2 2"/>'
+            svg += f'<text {marker_attrs} x="{x:.1f}" y="{yp(p.price) + 18:.1f}" text-anchor="middle" fill="{"#444" if valid else "#9aa4b2"}" font-size="9" dominant-baseline="top">{p.price:.1f}</text>'
 
     svg += f'<line id="chart-selected-line-{cid}" x1="{LM}" y1="{TM}" x2="{LM}" y2="{H - BM}" stroke="#1f6f8b" stroke-width="1.5" stroke-dasharray="4 3" opacity="0.95" style="display:none;pointer-events:none;"/>'
     svg += f'<line id="chart-selected-pen-{cid}" x1="{LM}" y1="{TM}" x2="{LM}" y2="{H - BM}" stroke="#7a5af8" stroke-width="4" opacity="0.95" stroke-linecap="round" style="display:none;pointer-events:none;"/>'
+    svg += f'<g id="chart-fractal-highlight-{cid}" style="pointer-events:none;"></g>'
     svg += (
         f'<g id="chart-crosshair-{cid}" style="display:none;pointer-events:none;">'
         f'<line id="crosshair-v-{cid}" x1="{LM}" y1="{TM}" x2="{LM}" y2="{H - BM}" stroke="#475467" stroke-width="1" stroke-dasharray="3 3" opacity="0.9"/>'
@@ -1233,6 +1315,7 @@ try {{
 var chartData = {{
   bars: {bar_json},
   pens: {pen_json},
+  fractals: {fractal_json},
   totalBars: {total_bars}
 }};
 
@@ -1241,6 +1324,7 @@ var wrap = document.getElementById('chc-{cid}');
 var tip = document.getElementById('chtooltip-{cid}');
 var selectedLine = document.getElementById('chart-selected-line-{cid}');
 var selectedPen = document.getElementById('chart-selected-pen-{cid}');
+var fractalHighlight = document.getElementById('chart-fractal-highlight-{cid}');
 var crosshair = document.getElementById('chart-crosshair-{cid}');
 var crosshairV = document.getElementById('crosshair-v-{cid}');
 var crosshairH = document.getElementById('crosshair-h-{cid}');
@@ -1314,6 +1398,10 @@ function updateViewBox() {{
 
 function priceAtY(y) {{
   return {yh} - ((y - TM) / ({H} - TM - BM)) * ({yr});
+}}
+
+function yAtPrice(price) {{
+  return TM + (CH - TM - BM) - (price - {yl}) / ({yr}) * (CH - TM - BM);
 }}
 
 function svgPointFromEvent(e) {{
@@ -1418,7 +1506,7 @@ function getBarAt(clientX) {{
 function showTip(idx, cx, cy) {{
   if (idx < 0 || idx >= chartData.totalBars) {{ tip.style.display = 'none'; return; }}
   var b = chartData.bars[idx];
-  var ds = b.dt.substring(0,4) + '\u5e74' + parseInt(b.dt.substring(4,6)) + '\u6708' + parseInt(b.dt.substring(6,8)) + '\u65e5';
+  var ds = b.display_dt || b.dt;
   tip.innerHTML = '<div><b>' + ds + '</b></div>' +
     '<div>\u5f00\u76d8: ' + b.o.toFixed(2) + ' &nbsp;|&nbsp; \u6700\u9ad8: ' + b.h.toFixed(2) + '</div>' +
     '<div>\u6536\u76d8: ' + b.c.toFixed(2) + ' &nbsp;|&nbsp; \u6700\u4f4e: ' + b.l.toFixed(2) + '</div>';
@@ -1453,6 +1541,40 @@ function showSelectedPen(pen) {{
   if (selectedLine) selectedLine.style.display = 'none';
 }}
 
+function clearFractalHighlight() {{
+  if (fractalHighlight) fractalHighlight.innerHTML = '';
+}}
+
+function showFractalHighlight(fractal) {{
+  if (!fractalHighlight || !fractal || !fractal.dates) return;
+  clearFractalHighlight();
+  var minX = Infinity, maxX = -Infinity, high = -Infinity, low = Infinity;
+  fractal.dates.forEach(function(dateValue) {{
+    var idx = dateToBar[normalizeKey(dateValue)];
+    if (idx === undefined) return;
+    var b = chartData.bars[idx];
+    minX = Math.min(minX, b.x - BW / 2 - 2);
+    maxX = Math.max(maxX, b.x + BW / 2 + 2);
+    high = Math.max(high, b.h);
+    low = Math.min(low, b.l);
+  }});
+  if (!isFinite(minX) || !isFinite(maxX) || !isFinite(high) || !isFinite(low)) return;
+  var yTop = yAtPrice(high) - 5;
+  var yBottom = yAtPrice(low) + 5;
+  var stroke = fractal.kind === 'top' ? '#d92d20' : '#175cd3';
+  var rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+  rect.setAttribute('x', minX.toFixed(1));
+  rect.setAttribute('y', yTop.toFixed(1));
+  rect.setAttribute('width', Math.max(4, maxX - minX).toFixed(1));
+  rect.setAttribute('height', Math.max(8, yBottom - yTop).toFixed(1));
+  rect.setAttribute('fill', 'none');
+  rect.setAttribute('stroke', stroke);
+  rect.setAttribute('stroke-width', '1.6');
+  rect.setAttribute('stroke-dasharray', '5 3');
+  rect.setAttribute('rx', '2');
+  fractalHighlight.appendChild(rect);
+}}
+
 function markSelectedRow(row) {{
   var panel = wrap.closest('.timeframe-panel') || document;
   panel.querySelectorAll('tr.chart-linked-row.selected-row').forEach(function(r) {{
@@ -1468,6 +1590,7 @@ function focusChartDate(value, row) {{
   var x = chartData.bars[idx].x;
   originX = x - viewW * 0.5;
   updateViewBox();
+  clearFractalHighlight();
   showSelectedLine(idx);
   markSelectedRow(row);
   var rect = svg.getBoundingClientRect();
@@ -1475,6 +1598,49 @@ function focusChartDate(value, row) {{
   var cy = rect.top + Math.min(rect.height - 20, Math.max(24, rect.height * 0.24));
   showTip(idx, cx, cy);
   wrap.scrollIntoView({{ block: 'nearest', inline: 'nearest', behavior: 'smooth' }});
+}}
+
+function findFractal(rowNumber) {{
+  rowNumber = Number(rowNumber);
+  for (var i = 0; i < chartData.fractals.length; i++) {{
+    if (Number(chartData.fractals[i].row) === rowNumber) return chartData.fractals[i];
+  }}
+  return null;
+}}
+
+function scrollRowWithinTable(row) {{
+  if (!row) return;
+  var tableWrap = row.closest('.table-wrap');
+  if (!tableWrap) return;
+  var rowTop = row.offsetTop;
+  var target = rowTop - tableWrap.clientHeight / 2 + row.clientHeight / 2;
+  tableWrap.scrollTo({{ top: Math.max(0, target), behavior: 'smooth' }});
+}}
+
+function focusFractal(rowNumber, sourceElement) {{
+  var fractal = findFractal(rowNumber);
+  if (!fractal) return false;
+  var row = (wrap.closest('.timeframe-panel') || document).querySelector('tr[data-fractal-row="' + rowNumber + '"]');
+  var idx = dateToBar[normalizeKey(fractal.date)];
+  if (idx !== undefined) {{
+    var x = chartData.bars[idx].x;
+    originX = x - viewW * 0.5;
+    updateViewBox();
+    showSelectedLine(idx);
+    var rect = svg.getBoundingClientRect();
+    var cx = rect.left + (x - originX) / viewW * rect.width;
+    var cy = rect.top + Math.min(rect.height - 20, Math.max(24, rect.height * 0.24));
+    showTip(idx, cx, cy);
+  }}
+  showFractalHighlight(fractal);
+  markSelectedRow(row);
+  if (row) {{
+    var details = row.closest('details');
+    if (details) details.open = true;
+    scrollRowWithinTable(row);
+  }}
+  if (sourceElement) sourceElement.classList.add('selected-fractal-marker');
+  return true;
 }}
 
 function focusChartPen(row) {{
@@ -1491,6 +1657,7 @@ function focusChartPen(row) {{
   }}
   originX = (x1 + x2) / 2 - viewW * 0.5;
   updateViewBox();
+  clearFractalHighlight();
   showSelectedPen(pen);
   markSelectedRow(row);
   var rect = svg.getBoundingClientRect();
@@ -1544,9 +1711,20 @@ window.addEventListener('mouseup', function() {{
 wrap.addEventListener('mouseleave', function() {{ tip.style.display = 'none'; }});
 
 document.addEventListener('click', function(e) {{
+  var marker = e.target.closest('.chart-fractal-marker');
+  if (marker && wrap.closest('.timeframe-panel.active')) {{
+    e.preventDefault();
+    focusFractal(marker.getAttribute('data-fractal-row'), marker);
+    return;
+  }}
   var penRow = e.target.closest('tr[data-pen-index]');
   if (penRow && wrap.closest('.timeframe-panel.active')) {{
     focusChartPen(penRow);
+    return;
+  }}
+  var fractalRow = e.target.closest('tr[data-fractal-row]');
+  if (fractalRow && wrap.closest('.timeframe-panel.active')) {{
+    focusFractal(fractalRow.getAttribute('data-fractal-row'));
     return;
   }}
   var row = e.target.closest('tr[data-chart-date]');
@@ -1674,7 +1852,7 @@ def build_report_panel(stock_code, frame):
         status = "有效" if valid else "已过滤"
         reason = html.escape(getattr(pv, "filter_reason", "") or "")
         f_lines.append(
-            f"<tr class=\"{' '.join(row_classes)}\" data-chart-date=\"{pv.date}\"><td>{i}</td><td>{fmt_date(pv.date)}</td><td>{'顶分型' if pv.kind=='top' else '底分型'}</td>"
+            f"<tr class=\"{' '.join(row_classes)}\" data-chart-date=\"{pv.date}\" data-fractal-row=\"{i}\"><td>{i}</td><td>{fmt_date(pv.date)}</td><td>{'顶分型' if pv.kind=='top' else '底分型'}</td>"
             f"<td>{price_with_date(pv.price, pv.date)}</td>"
             f"<td>{price_with_date(pv.high, getattr(pv,'high_date','') or pv.date)}</td>"
             f"<td>{price_with_date(pv.low, getattr(pv,'low_date','') or pv.date)}</td>"
@@ -1713,13 +1891,16 @@ def build_report_panel(stock_code, frame):
         )
     penrows = "".join(pen_lines)
 
-    svg = _make_svg_chart(stock_code, bars, pens, raw_fractals, [], [], label, key) if len(bars) > 1 else ""
+    svg = _make_svg_chart(stock_code, bars, pens, fractal_records, [], [], label, key, merged_bars) if len(bars) > 1 else ""
     chart_section = f'''
 <section class="chart-section">
 <h2>{html.escape(label)} K 线分型图</h2>
 <div class="legend">
-<span><span class="dot" style="background:#1f6f8b"></span>顶分型(▼)</span>
-<span><span class="dot" style="background:#f79009"></span>底分型(▲)</span>
+<span><span class="dot" style="background:#1f6f8b"></span>有效顶分型(▼)</span>
+<span><span class="dot" style="background:#f79009"></span>有效底分型(▲)</span>
+<span><span class="triangle-sample dashed-top"></span>过滤顶分型</span>
+<span><span class="triangle-sample dashed-bottom"></span>过滤底分型</span>
+<span><span class="box-sample dashed-absorbed"></span>被包含处理K线</span>
 <span><span class="line-sample line-up"></span>向上笔</span>
 <span><span class="line-sample line-down"></span>向下笔</span>
 </div>
@@ -1836,9 +2017,16 @@ ul {{ margin:0; padding-left:18px; }}
 .legend {{ display:flex; gap:16px; flex-wrap:wrap; margin-bottom:8px; font-size:13px; }}
 .legend span {{ display:inline-flex; align-items:center; gap:4px; }}
 .legend .dot {{ display:inline-block; width:12px; height:12px; border-radius:50%; }}
+.triangle-sample {{ width:0; height:0; display:inline-block; border-left:6px solid transparent; border-right:6px solid transparent; }}
+.triangle-sample.dashed-top {{ border-bottom:10px dashed #1f6f8b; }}
+.triangle-sample.dashed-bottom {{ border-top:10px dashed #f79009; }}
+.box-sample {{ width:14px; height:14px; display:inline-block; border-radius:2px; }}
+.box-sample.dashed-absorbed {{ border:1.5px dashed #d92d20; background:rgba(217,45,32,.06); }}
 .line-sample {{ width:22px; height:0; display:inline-block; border-top:3px solid; border-radius:3px; }}
 .line-up {{ border-color:#12b76a; }}
 .line-down {{ border-color:#d92d20; }}
+.chart-fractal-marker:hover {{ filter:drop-shadow(0 0 3px rgba(245,158,11,.85)); }}
+.selected-fractal-marker {{ filter:drop-shadow(0 0 4px rgba(245,158,11,.95)); }}
 .chan-chart-shell {{ position:relative; border-radius:6px; background:#fafafa; -webkit-user-select:none; user-select:none; max-width:100%; }}
 .chart-toolbar {{ display:flex; gap:6px; padding:6px 0; align-items:center; flex-wrap:wrap; }}
 .chart-toolbar button {{ min-width:34px; height:30px; padding:0 10px; border:1px solid #d9dee7; border-radius:4px; background:#fff; color:var(--ink); cursor:pointer; font-size:15px; line-height:1; }}
@@ -1974,6 +2162,7 @@ def summarize_source_candidate(provider, label, ok, fetched_code="", bars=None, 
 
 def fetch_intraday_frame(args, key, label, klt):
     secid, code, name = resolve_web_secid(args.stock)
+    name = name or lookup_stock_name(code, args.stock)
     attempts = [
         ("新浪分钟K线", lambda: fetch_sina_intraday_kline(code, klt, None)),
         ("东方财富", lambda: fetch_kline(secid, klt, None)),
@@ -2001,7 +2190,7 @@ def fetch_intraday_frame(args, key, label, klt):
         raise SystemExit(f"{label}分钟线所有来源均不可用：{failures}")
 
     selected = sorted(usable, key=lambda x: (-len(x["bars"]), x["order"]))[0]
-    display_name = name or selected.get("name") or ""
+    display_name = name or selected.get("name") or lookup_stock_name(selected["code"], args.stock)
     source = f"{selected['provider']} ({selected['code']}, {label}, {len(selected['bars'])}根)"
     stock_code = f"{code} ({display_name})" if display_name else code
     for c in candidates:
