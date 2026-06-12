@@ -1202,6 +1202,14 @@ def _make_svg_chart(stock_code, bars, pens, raw_fractals, centers, segments, tim
 
     svg += f'<line id="chart-selected-line-{cid}" x1="{LM}" y1="{TM}" x2="{LM}" y2="{H - BM}" stroke="#1f6f8b" stroke-width="1.5" stroke-dasharray="4 3" opacity="0.95" style="display:none;pointer-events:none;"/>'
     svg += f'<line id="chart-selected-pen-{cid}" x1="{LM}" y1="{TM}" x2="{LM}" y2="{H - BM}" stroke="#7a5af8" stroke-width="4" opacity="0.95" stroke-linecap="round" style="display:none;pointer-events:none;"/>'
+    svg += (
+        f'<g id="chart-crosshair-{cid}" style="display:none;pointer-events:none;">'
+        f'<line id="crosshair-v-{cid}" x1="{LM}" y1="{TM}" x2="{LM}" y2="{H - BM}" stroke="#475467" stroke-width="1" stroke-dasharray="3 3" opacity="0.9"/>'
+        f'<line id="crosshair-h-{cid}" x1="{LM}" y1="{TM}" x2="{total_width - RM}" y2="{TM}" stroke="#475467" stroke-width="1" stroke-dasharray="3 3" opacity="0.9"/>'
+        f'<rect id="crosshair-price-bg-{cid}" x="{LM}" y="{TM - 9}" width="44" height="18" rx="3" fill="#344054" opacity="0.96"/>'
+        f'<text id="crosshair-price-text-{cid}" x="{LM + 22}" y="{TM}" text-anchor="middle" fill="#fff" font-size="10" dominant-baseline="middle">-</text>'
+        f'</g>'
+    )
     svg += '</g></svg>'
 
     # ── 交互 HTML（viewBox 缩放/拖拽） ──
@@ -1233,6 +1241,11 @@ var wrap = document.getElementById('chc-{cid}');
 var tip = document.getElementById('chtooltip-{cid}');
 var selectedLine = document.getElementById('chart-selected-line-{cid}');
 var selectedPen = document.getElementById('chart-selected-pen-{cid}');
+var crosshair = document.getElementById('chart-crosshair-{cid}');
+var crosshairV = document.getElementById('crosshair-v-{cid}');
+var crosshairH = document.getElementById('crosshair-h-{cid}');
+var crosshairPriceBg = document.getElementById('crosshair-price-bg-{cid}');
+var crosshairPriceText = document.getElementById('crosshair-price-text-{cid}');
 
 var LM = {LM}, BW = {BW}, TM = {TM}, BM = {BM}, RM = {RM};
 var CH = {H};
@@ -1246,6 +1259,8 @@ var minVisibleBars = Math.min(chartData.totalBars, 24);
 var minViewW = Math.max(minVisibleBars * BW, 180);
 var maxViewW = Math.max(totalWidth, minViewW);
 var dateToBar = {{}};
+var crosshairState = null;
+var crosshairEnabled = false;
 
 function digitsOnly(value) {{
   return String(value || '').replace(/[^0-9]/g, '');
@@ -1293,7 +1308,57 @@ function updateViewBox() {{
   originX = Math.max(0, Math.min(Math.max(0, totalWidth - viewW), originX));
   originY = Math.max(0, Math.min(Math.max(0, CH - viewH), originY));
   svg.setAttribute('viewBox', originX.toFixed(1) + ' ' + originY.toFixed(1) + ' ' + viewW.toFixed(1) + ' ' + viewH.toFixed(1));
+  updateCrosshairLabel();
   updateZoomLabel();
+}}
+
+function priceAtY(y) {{
+  return {yh} - ((y - TM) / ({H} - TM - BM)) * ({yr});
+}}
+
+function svgPointFromEvent(e) {{
+  var rect = svg.getBoundingClientRect();
+  var x = (e.clientX - rect.left) / (rect.width || 1) * viewW + originX;
+  var y = (e.clientY - rect.top) / (rect.height || 1) * viewH + originY;
+  return {{ x: Math.max(LM, Math.min(totalWidth - RM, x)), y: Math.max(TM, Math.min(CH - BM, y)) }};
+}}
+
+function updateCrosshairLabel() {{
+  if (!crosshairState || !crosshair || crosshair.style.display === 'none') return;
+  var x = crosshairState.x;
+  var y = crosshairState.y;
+  var price = priceAtY(y);
+  var labelW = Math.max(48, Math.min(88, String(price.toFixed(2)).length * 7 + 12));
+  var labelX = Math.max(originX + 4, LM);
+  if (labelX + labelW > originX + viewW - 4) labelX = originX + viewW - labelW - 4;
+  crosshairV.setAttribute('x1', x.toFixed(1));
+  crosshairV.setAttribute('x2', x.toFixed(1));
+  crosshairV.setAttribute('y1', originY.toFixed(1));
+  crosshairV.setAttribute('y2', (originY + viewH).toFixed(1));
+  crosshairH.setAttribute('x1', originX.toFixed(1));
+  crosshairH.setAttribute('x2', (originX + viewW).toFixed(1));
+  crosshairH.setAttribute('y1', y.toFixed(1));
+  crosshairH.setAttribute('y2', y.toFixed(1));
+  crosshairPriceBg.setAttribute('x', labelX.toFixed(1));
+  crosshairPriceBg.setAttribute('y', (y - 9).toFixed(1));
+  crosshairPriceBg.setAttribute('width', labelW.toFixed(1));
+  crosshairPriceText.setAttribute('x', (labelX + labelW / 2).toFixed(1));
+  crosshairPriceText.setAttribute('y', y.toFixed(1));
+  crosshairPriceText.textContent = price.toFixed(2);
+}}
+
+function showCrosshairAtEvent(e) {{
+  var p = svgPointFromEvent(e);
+  crosshairState = p;
+  crosshairEnabled = true;
+  if (crosshair) crosshair.style.display = 'block';
+  updateCrosshairLabel();
+}}
+
+function hideCrosshair() {{
+  crosshairEnabled = false;
+  crosshairState = null;
+  if (crosshair) crosshair.style.display = 'none';
 }}
 
 function updateZoomLabel() {{
@@ -1459,9 +1524,12 @@ window.addEventListener('mousemove', function(e) {{
     }}
     return;
   }}
-  var idx = getBarAt(e.clientX);
   var r = svg.getBoundingClientRect();
   var my = r.height ? ((e.clientY - r.top) / r.height * viewH + originY) : -1;
+  if (crosshairEnabled && my >= TM && my <= CH - BM) {{
+    showCrosshairAtEvent(e);
+  }}
+  var idx = getBarAt(e.clientX);
   if (idx >= 0 && my >= TM && my <= CH - BM) {{
     showTip(idx, e.clientX, e.clientY);
   }} else {{
@@ -1549,9 +1617,14 @@ document.getElementById('reset-zoom-btn-{cid}').addEventListener('click', functi
   resetViewWindow();
 }});
 
-wrap.addEventListener('dblclick', function() {{
+wrap.addEventListener('dblclick', function(e) {{
+  e.preventDefault();
   tip.style.display = 'none';
-  resetViewWindow();
+  if (crosshairEnabled) {{
+    hideCrosshair();
+  }} else {{
+    showCrosshairAtEvent(e);
+  }}
 }});
 
 initSize();
