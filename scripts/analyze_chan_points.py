@@ -128,12 +128,45 @@ def eastsrch(query: str) -> List[dict]:
     items = []
     data = (resp.json().get("QuotationCodeTable",{}) or {}).get("Data") or []
     for sec in data:
-        items.append({"code":sec.get("Code",""),"name":sec.get("Name",""),"mkt":sec.get("MktNum",0)})
+        items.append({"code":sec.get("Code",""),"name":sec.get("Name",""),"mkt":sec.get("MktNum",0),
+                      "type":sec.get("SecurityTypeName",""),"quote_id":sec.get("QuoteID","")})
     return items
+
+def is_index_query(query: str) -> bool:
+    q = query.strip().upper().replace(" ", "")
+    return any(x in q for x in ("上证", "沪指", "上证指数", "深证成指", "创业板指", "科创50", "指数"))
+
+def normalize_index_code(code: str, market: str = "") -> str:
+    raw = code.strip().upper().replace(" ", "")
+    if raw in ("上证", "沪指", "上证指数", "000001", "SH000001", "1.000001"):
+        return "SH000001"
+    if raw in ("深证成指", "399001", "SZ399001", "0.399001"):
+        return "SZ399001"
+    if raw in ("创业板指", "399006", "SZ399006", "0.399006"):
+        return "SZ399006"
+    if raw in ("科创50", "000688", "SH000688", "1.000688"):
+        return "SH000688"
+    quote_m = re.fullmatch(r"([01])\.(\d{6})", raw)
+    if quote_m:
+        return f"{'SH' if quote_m.group(1) == '1' else 'SZ'}{quote_m.group(2)}"
+    m = re.fullmatch(r"(SH|SZ)(\d{6})", raw)
+    if m:
+        return f"{m.group(1)}{m.group(2)}"
+    if re.fullmatch(r"\d{6}", raw):
+        if market == "1" or raw.startswith("000"):
+            return f"SH{raw}"
+        return f"SZ{raw}"
+    raise ValueError(f"无法解析指数代码: {code}")
+
+def is_index_code(code: str) -> bool:
+    raw = str(code).strip().upper().replace(" ", "")
+    return bool(re.fullmatch(r"(SH000\d{3}|SH000688|SZ399\d{3})", raw))
 
 def code_to_secid(code: str) -> str:
     c = normalize_stock_code(code)
     raw = code.strip().upper().replace(" ", "")
+    if is_index_code(raw):
+        return f"{'1' if raw.startswith('SH') else '0'}.{raw[2:]}"
     if "中证1000" in code or raw == "399852":
         return "0.399852"
     if c.endswith(".HK"): return f"116.{c.replace('.HK','')}"
@@ -148,6 +181,9 @@ def resolve_web_secid(stock_query: str) -> Tuple[str, str, str]:
     raw = query.upper().replace(" ", "")
     if "中证1000" in query or raw == "399852":
         return "0.399852", "399852", "中证1000"
+    if is_index_query(query):
+        idx_code = normalize_index_code(query)
+        return code_to_secid(idx_code), idx_code, query
     normalized = normalize_stock_code(query)
     try:
         secid = code_to_secid(normalized)
@@ -186,6 +222,132 @@ def fetch_kline(secid: str, klt: str = "101", limit: Optional[int] = None):
     bars = [b for b in bars if b.close > 0]
     if len(bars) < 40: raise SystemExit(f"数据不足40根K线 (实际{len(bars)})")
     return code, name, bars
+
+def sina_symbol_from_code(code: str) -> str:
+    raw = str(code).strip().upper().replace(" ", "")
+    if raw.startswith("SH"):
+        return "sh" + raw[2:]
+    if raw.startswith("SZ"):
+        return "sz" + raw[2:]
+    if raw.startswith("1."):
+        return "sh" + raw.split(".", 1)[1]
+    if raw.startswith("0."):
+        return "sz" + raw.split(".", 1)[1]
+    if raw.endswith(".SH"):
+        return "sh" + raw[:6]
+    if raw.endswith(".SZ"):
+        return "sz" + raw[:6]
+    if re.fullmatch(r"\d{6}", raw):
+        return ("sh" if raw.startswith(("6", "9")) else "sz") + raw
+    raise ValueError(f"无法转为新浪代码: {code}")
+
+def fetch_sina_intraday_kline(code: str, period: str, limit: Optional[int] = None):
+    if not HAS_REQUESTS: raise SystemExit("需要 requests 库")
+    symbol = sina_symbol_from_code(code)
+    url = "https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData"
+    params = {"symbol": symbol, "scale": period, "ma": "no", "datalen": str(limit or 1000000)}
+    resp = _session.get(url, params=params, headers={"User-Agent": "Mozilla/5.0", "Referer": "https://finance.sina.com.cn/"}, timeout=15)
+    resp.raise_for_status()
+    try:
+        rows = resp.json()
+    except Exception:
+        rows = json.loads(resp.content.decode("gbk", errors="ignore"))
+    if not isinstance(rows, list) or not rows:
+        raise SystemExit(f"新浪分钟K线无数据 (symbol={symbol}, period={period})")
+    bars = []
+    for row in rows:
+        try:
+            dt = re.sub(r"\D", "", str(row.get("day", "")))[:12]
+            if len(dt) < 12:
+                continue
+            open_ = float(row["open"])
+            high = float(row["high"])
+            low = float(row["low"])
+            close = float(row["close"])
+            volume = float(row.get("volume", 0) or 0)
+            bars.append(Bar(symbol, dt, open_, high, low, close, volume, 0))
+        except Exception:
+            continue
+    bars.sort(key=lambda x: x.trade_date)
+    bars = [b for b in bars if b.close > 0]
+    if len(bars) < 40:
+        raise SystemExit(f"新浪分钟K线不足40根 (实际{len(bars)}, symbol={symbol}, period={period})")
+    return symbol, "", bars
+
+def fetch_mootdx_intraday_kline(code: str, period: str, limit: Optional[int] = None):
+    try:
+        import mootdx  # noqa: F401
+    except ImportError as exc:
+        raise RuntimeError("当前环境未安装 mootdx，无法使用通达信分钟线") from exc
+    raise RuntimeError("mootdx 分钟线接口尚未接入可用服务器")
+
+def fetch_baostock_intraday_kline(code: str, period: str, limit: Optional[int] = None):
+    try:
+        import baostock as bs
+    except ImportError as exc:
+        raise RuntimeError("当前环境未安装 baostock，无法使用 baostock 分钟线") from exc
+
+    norm = normalize_stock_code(code)
+    if norm.endswith(".HK"):
+        raise RuntimeError("baostock 不支持港股分钟线")
+    if norm.startswith("SH"):
+        bs_code = "sh." + norm[2:]
+    elif norm.startswith("SZ"):
+        bs_code = "sz." + norm[2:]
+    elif norm.endswith(".SH"):
+        bs_code = "sh." + norm[:6]
+    elif norm.endswith(".SZ"):
+        bs_code = "sz." + norm[:6]
+    elif re.fullmatch(r"\d{6}", norm):
+        bs_code = ("sh." if norm.startswith(("6", "9")) else "sz.") + norm
+    else:
+        raise RuntimeError(f"baostock 无法解析代码: {code}")
+
+    login = bs.login()
+    if getattr(login, "error_code", "0") != "0":
+        raise RuntimeError(f"baostock 登录失败: {getattr(login, 'error_msg', '')}")
+    bars = []
+    try:
+        end_date = datetime.now().strftime("%Y-%m-%d")
+        rs = bs.query_history_k_data_plus(
+            bs_code,
+            "date,time,code,open,high,low,close,volume,amount",
+            start_date="1990-01-01",
+            end_date=end_date,
+            frequency=period,
+            adjustflag="2",
+        )
+        if getattr(rs, "error_code", "0") != "0":
+            raise RuntimeError(f"baostock 查询失败: {getattr(rs, 'error_msg', '')}")
+        while rs.next():
+            row = dict(zip(rs.fields, rs.get_row_data()))
+            try:
+                raw_time = re.sub(r"\D", "", row.get("time") or row.get("date") or "")
+                dt = raw_time[:12] if len(raw_time) >= 12 else re.sub(r"\D", "", row.get("date", ""))
+                if len(dt) < 12:
+                    continue
+                bars.append(Bar(
+                    bs_code,
+                    dt,
+                    float(row["open"]),
+                    float(row["high"]),
+                    float(row["low"]),
+                    float(row["close"]),
+                    float(row.get("volume") or 0),
+                    float(row.get("amount") or 0),
+                ))
+            except Exception:
+                continue
+    finally:
+        try:
+            bs.logout()
+        except Exception:
+            pass
+    bars.sort(key=lambda x: x.trade_date)
+    bars = [b for b in bars if b.close > 0]
+    if len(bars) < 40:
+        raise SystemExit(f"baostock 分钟K线不足40根 (实际{len(bars)}, code={bs_code}, period={period})")
+    return bs_code, "", bars
 
 def fetch_hk_daily_akshare(code: str, limit: int = 500):
     hk_code = normalize_stock_code(code).replace(".HK","")
@@ -268,6 +430,41 @@ def fetch_csindex_daily_akshare(query: str, limit: int = 500):
         raise SystemExit(f"akshare 中证指数数据不足40根K线 (实际{len(bars)})")
     return symbol, name or "中证1000", bars
 
+def fetch_index_daily_akshare(index_code: str, limit: Optional[int] = None):
+    code = normalize_index_code(index_code)
+    try:
+        import akshare as ak
+    except ImportError as exc:
+        raise SystemExit("未安装 akshare，无法获取指数日线数据。") from exc
+    symbol = code.lower()
+    df = ak.stock_zh_index_daily(symbol=symbol)
+    if df is None or len(df) == 0:
+        raise SystemExit(f"AKShare 未返回指数日线数据 ({symbol})")
+    if limit and len(df) > limit:
+        df = df.tail(limit)
+    bars = []
+    for row in df.to_dict("records"):
+        try:
+            dt = str(row.get("date", "")).replace("-", "")[:8]
+            if not re.fullmatch(r"\d{8}", dt):
+                continue
+            open_ = float(row["open"])
+            high = float(row["high"])
+            low = float(row["low"])
+            close = float(row["close"])
+            if any(math.isnan(x) for x in (open_, high, low, close)):
+                continue
+            bars.append(Bar(code, dt, open_, high, low, close,
+                           float(row.get("volume", 0) or 0), float(row.get("amount", 0) or 0)))
+        except Exception:
+            continue
+    bars.sort(key=lambda x: x.trade_date)
+    bars = [b for b in bars if b.close > 0]
+    if len(bars) < 40:
+        raise SystemExit(f"AKShare 指数数据不足40根K线 (实际{len(bars)})")
+    names = {"SH000001": "上证指数", "SZ399001": "深证成指", "SZ399006": "创业板指", "SH000688": "科创50"}
+    return code, names.get(code, ""), bars
+
 def fetch_a_daily_akshare(code: str, limit: Optional[int] = None):
     normalized = normalize_stock_code(code)
     m = re.fullmatch(r"(\d{6})\.(SH|SZ|BJ)", normalized)
@@ -323,15 +520,22 @@ def fetch_stock_from_web(stock_query: str, klt: str = "101", limit: int = 500):
     query = stock_query.strip()
     normalized = normalize_stock_code(query)
     if klt != "101":
-        secid = code_to_secid(normalized)
+        if is_index_query(query):
+            secid = code_to_secid(normalize_index_code(query))
+        else:
+            secid = code_to_secid(normalized)
         code, name, bars = fetch_kline(secid, klt, limit)
         for b in bars: b.ts_code = f"{code} ({name})" if name else code
         return code, name, bars, "东方财富"
 
     try:
-        code_to_secid(normalized)
-        resolved_code = normalized
-        resolved_name = ""
+        if is_index_query(query):
+            resolved_code = normalize_index_code(query)
+            resolved_name = ""
+        else:
+            code_to_secid(normalized)
+            resolved_code = normalized
+            resolved_name = ""
     except Exception:
         if csindex_symbol_from_query(query):
             resolved_code = query
@@ -341,11 +545,19 @@ def fetch_stock_from_web(stock_query: str, klt: str = "101", limit: int = 500):
             results = eastsrch(search_query)
             if not results: raise SystemExit(f"搜索不到「{query}」")
             best = results[0]
-            resolved_code = normalize_stock_code(best["code"])
+            if best.get("type") == "指数" or best.get("quote_id"):
+                resolved_code = normalize_index_code(best.get("quote_id") or best["code"], str(best.get("mkt","")))
+            else:
+                resolved_code = normalize_stock_code(best["code"])
             resolved_name = best.get("name","")
 
     attempts = []
-    if normalize_stock_code(resolved_code).endswith((".SH", ".SZ", ".BJ")):
+    if is_index_code(resolved_code):
+        attempts.extend([
+            ("AKShare-新浪财经指数", lambda: fetch_index_daily_akshare(resolved_code, limit)),
+            ("东方财富", lambda: fetch_kline(code_to_secid(resolved_code), klt, limit)),
+        ])
+    elif normalize_stock_code(resolved_code).endswith((".SH", ".SZ", ".BJ")):
         attempts.extend([
             ("AKShare-新浪财经", lambda: fetch_a_daily_akshare(resolved_code, limit)),
             ("东方财富", lambda: fetch_kline(code_to_secid(resolved_code), klt, limit)),
@@ -1559,13 +1771,56 @@ def unavailable_timeframe(key, label, error):
     }
 
 
+def summarize_source_candidate(provider, label, ok, fetched_code="", bars=None, error=""):
+    bar_count = len(bars or [])
+    status = "可用" if ok else "不可用"
+    return {
+        "provider": provider,
+        "label": label,
+        "available": bool(ok),
+        "bar_count": bar_count,
+        "code": fetched_code,
+        "status": f"{status}{f'，{bar_count}根' if ok else ''}",
+        "selected": False,
+        "error": "" if ok else str(error),
+    }
+
+
 def fetch_intraday_frame(args, key, label, klt):
     secid, code, name = resolve_web_secid(args.stock)
-    code, fetched_name, bars = fetch_kline(secid, klt, None)
-    display_name = name or fetched_name
-    source = f"东方财富 ({code}, {label})"
+    attempts = [
+        ("新浪分钟K线", lambda: fetch_sina_intraday_kline(code, klt, None)),
+        ("东方财富", lambda: fetch_kline(secid, klt, None)),
+        ("mootdx", lambda: fetch_mootdx_intraday_kline(code, klt, None)),
+        ("baostock", lambda: fetch_baostock_intraday_kline(code, klt, None)),
+    ]
+    candidates = []
+    usable = []
+    for order_idx, (provider, fetcher) in enumerate(attempts):
+        try:
+            fetched_code, fetched_name, bars = fetcher()
+            candidates.append(summarize_source_candidate(provider, label, True, fetched_code, bars))
+            usable.append({
+                "order": order_idx,
+                "provider": provider,
+                "code": fetched_code,
+                "name": fetched_name,
+                "bars": bars,
+            })
+        except Exception as exc:
+            candidates.append(summarize_source_candidate(provider, label, False, error=exc))
+
+    if not usable:
+        failures = "；".join(f"{c['provider']}: {c['error']}" for c in candidates)
+        raise SystemExit(f"{label}分钟线所有来源均不可用：{failures}")
+
+    selected = sorted(usable, key=lambda x: (-len(x["bars"]), x["order"]))[0]
+    display_name = name or selected.get("name") or ""
+    source = f"{selected['provider']} ({selected['code']}, {label}, {len(selected['bars'])}根)"
     stock_code = f"{code} ({display_name})" if display_name else code
-    return stock_code, source, bars
+    for c in candidates:
+        c["selected"] = c["provider"] == selected["provider"] and c.get("code") == selected["code"]
+    return stock_code, source, selected["bars"], candidates
 
 
 def build_timeframes(args, daily_stock_code, daily_source, daily_bars):
@@ -1587,9 +1842,10 @@ def build_timeframes(args, daily_stock_code, daily_source, daily_bars):
             else:
                 if args.source == "local":
                     raise SystemExit("本地 CSV 仅提供日线，分钟线需要网络数据")
-                intraday_stock_code, intraday_source, intraday_bars = fetch_intraday_frame(args, key, label, klts[key])
+                intraday_stock_code, intraday_source, intraday_bars, source_candidates = fetch_intraday_frame(args, key, label, klts[key])
                 stock_code = intraday_stock_code or stock_code
                 frame = analyze_timeframe_frame(key, label, stock_code, intraday_source, intraday_bars, args)
+                frame["source_candidates"] = source_candidates
             frames_by_key[key] = frame
         except Exception as exc:
             frames_by_key[key] = unavailable_timeframe(key, label, exc)
@@ -1621,6 +1877,7 @@ def timeframe_summary(frame):
         "merged_count": frame.get("merged_count", 0),
         "fractal_candidate_count": frame.get("fractal_candidate_count", 0),
         "valid_fractal_count": frame.get("valid_fractal_count", 0),
+        "source_candidates": frame.get("source_candidates", []),
         "error": frame.get("error", ""),
     }
 
