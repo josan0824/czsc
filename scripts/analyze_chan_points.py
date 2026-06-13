@@ -11,6 +11,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 import warnings
 warnings.filterwarnings("ignore", message=".*character detection.*")
+REVERSE_GAP_THRESHOLD = 0.003
 try:
     import requests
     HAS_REQUESTS = True
@@ -44,6 +45,7 @@ class Pivot:
     low_date: str = ""
     valid: bool = True
     filter_reason: str = ""
+    preserve_reason: str = ""
 
 @dataclass
 class Center:
@@ -917,26 +919,94 @@ def find_fractal_candidates(merged: List[MergedBar]) -> List[Pivot]:
     candidates.sort(key=lambda p: (p.index, 0 if p.kind=="bottom" else 1))
     return candidates
 
+def has_down_gap(prev: MergedBar, curr: MergedBar, threshold: float = REVERSE_GAP_THRESHOLD) -> bool:
+    return prev.low > 0 and prev.low > curr.high and (prev.low - curr.high) / prev.low > threshold
+
+def has_up_gap(prev: MergedBar, curr: MergedBar, threshold: float = REVERSE_GAP_THRESHOLD) -> bool:
+    return prev.high > 0 and curr.low > prev.high and (curr.low - prev.high) / prev.high > threshold
+
+def reverse_gap_preserve_reason(p: Pivot, merged: Optional[List[MergedBar]]) -> str:
+    if not merged or p.index + 1 >= len(merged):
+        return ""
+    for i in range(p.index, min(len(merged) - 1, p.index + 2)):
+        curr = merged[i]
+        nxt = merged[i + 1]
+        if p.kind == "top" and has_down_gap(curr, nxt):
+            pct = (curr.low - nxt.high) / curr.low * 100
+            return (
+                f"反向缺口保护：顶分型后{fmt_date(curr.date)}→{fmt_date(nxt.date)}"
+                f"向下缺口{pct:.2f}%"
+            )
+        if p.kind == "bottom" and has_up_gap(curr, nxt):
+            pct = (nxt.low - curr.high) / curr.high * 100
+            return (
+                f"反向缺口保护：底分型后{fmt_date(curr.date)}→{fmt_date(nxt.date)}"
+                f"向上缺口{pct:.2f}%"
+            )
+    return ""
+
+def reverse_gap_from_previous_reason(prev_pivot: Pivot, p: Pivot, merged: Optional[List[MergedBar]]) -> str:
+    if not merged:
+        return ""
+    start = max(0, p.index - 1)
+    end = min(len(merged) - 1, p.index + 1)
+    for i in range(start, end):
+        curr = merged[i]
+        nxt = merged[i + 1]
+        if prev_pivot.kind == "top" and has_down_gap(curr, nxt):
+            pct = (curr.low - nxt.high) / curr.low * 100
+            return (
+                f"反向缺口保护：前一顶分型{fmt_date(prev_pivot.date)}后，"
+                f"{fmt_date(curr.date)}→{fmt_date(nxt.date)}向下缺口{pct:.2f}%"
+            )
+        if prev_pivot.kind == "bottom" and has_up_gap(curr, nxt):
+            pct = (nxt.low - curr.high) / curr.high * 100
+            return (
+                f"反向缺口保护：前一底分型{fmt_date(prev_pivot.date)}后，"
+                f"{fmt_date(curr.date)}→{fmt_date(nxt.date)}向上缺口{pct:.2f}%"
+            )
+    return ""
+
 def find_fractals(merged: List[MergedBar]) -> List[Pivot]:
-    records = filter_fractals_by_occupied_bars(find_fractal_candidates(merged))
+    records = filter_fractals_by_occupied_bars(find_fractal_candidates(merged), merged)
     return [p for p in records if p.valid]
 
-def filter_fractals_by_occupied_bars(candidates: List[Pivot]) -> List[Pivot]:
+def has_directional_gap_between(start: Pivot, end: Pivot, merged: Optional[List[MergedBar]]) -> str:
+    if not merged:
+        return ""
+    left = max(0, min(start.index, end.index) - 1)
+    right = min(len(merged) - 1, max(start.index, end.index) + 1)
+    for i in range(left, right):
+        curr = merged[i]
+        nxt = merged[i + 1]
+        if start.kind == "top" and end.kind == "bottom" and has_down_gap(curr, nxt):
+            pct = (curr.low - nxt.high) / curr.low * 100
+            return f"向下缺口: {fmt_date(curr.date)}→{fmt_date(nxt.date)} {pct:.2f}%"
+        if start.kind == "bottom" and end.kind == "top" and has_up_gap(curr, nxt):
+            pct = (nxt.low - curr.high) / curr.high * 100
+            return f"向上缺口: {fmt_date(curr.date)}→{fmt_date(nxt.date)} {pct:.2f}%"
+    return ""
+
+def filter_fractals_by_occupied_bars(candidates: List[Pivot], merged: Optional[List[MergedBar]] = None) -> List[Pivot]:
     """确定分型序列。
 
     - 每个分型占用3根K线，两个分型之间至少隔1根独立K线。
     - 同类连续分型只保留更极端者：顶取更高，底取更低。
     - 底后顶：顶分型的底不能低于/等于前底分型的顶。
     - 顶后底：底分型的顶不能高于/等于前顶分型的底。
+    - 若待过滤分型包含反向缺口，则保留该分型。
     """
     pivots = []
     for p in candidates:
         p.valid = True
         p.filter_reason = ""
+        p.preserve_reason = reverse_gap_preserve_reason(p, merged)
         if not pivots:
             pivots.append(p)
             continue
         last = pivots[-1]
+        if not p.preserve_reason:
+            p.preserve_reason = reverse_gap_from_previous_reason(last, p, merged)
         if p.kind == last.kind:
             better_top = p.kind == "top" and p.price > last.price
             better_bottom = p.kind == "bottom" and p.price < last.price
@@ -947,6 +1017,7 @@ def filter_fractals_by_occupied_bars(candidates: List[Pivot]) -> List[Pivot]:
                     if p.kind == "top"
                     else f"同类分型，后续底分型更低，保留{fmt_date(p.date)}"
                 )
+                p.preserve_reason = ""
                 pivots[-1] = p
             else:
                 p.valid = False
@@ -955,17 +1026,23 @@ def filter_fractals_by_occupied_bars(candidates: List[Pivot]) -> List[Pivot]:
                     if p.kind == "top"
                     else f"同类分型，底分型未低于已保留底分型{fmt_date(last.date)}"
                 )
+                p.preserve_reason = ""
             continue
 
         last_end = last.index + 1
         curr_start = p.index - 1
         if curr_start < last_end + 2:
-            p.valid = False
-            p.filter_reason = f"分型占用区间与前一有效分型{fmt_date(last.date)}重叠，或中间不足1根独立K线"
+            if p.preserve_reason:
+                pivots.append(p)
+            else:
+                p.valid = False
+                p.filter_reason = f"分型占用区间与前一有效分型{fmt_date(last.date)}重叠，或中间不足1根独立K线"
             continue
 
         if last.kind == "bottom" and p.kind == "top":
             if p.low > last.high:
+                pivots.append(p)
+            elif p.preserve_reason:
                 pivots.append(p)
             else:
                 p.valid = False
@@ -973,6 +1050,8 @@ def filter_fractals_by_occupied_bars(candidates: List[Pivot]) -> List[Pivot]:
             continue
         if last.kind == "top" and p.kind == "bottom":
             if p.high < last.low:
+                pivots.append(p)
+            elif p.preserve_reason:
                 pivots.append(p)
             else:
                 p.valid = False
@@ -983,7 +1062,7 @@ def filter_fractals_by_occupied_bars(candidates: List[Pivot]) -> List[Pivot]:
 
 # ───────── 笔构造 ─────────
 
-def build_pens(fractals: List[Pivot], min_gap=2, min_swing_pct=0.0, return_details=False):
+def build_pens(fractals: List[Pivot], min_gap=2, min_swing_pct=0.0, return_details=False, merged: Optional[List[MergedBar]] = None):
     """构造笔，规则：
     - 顶底交替，连续同向取极值
     - 反向分型须间隔 min_gap 根K线
@@ -1006,8 +1085,9 @@ def build_pens(fractals: List[Pivot], min_gap=2, min_swing_pct=0.0, return_detai
                 if len(pens) >= 2:
                     prev = pens[-2]
                     ok = False
+                    gap_reason = has_directional_gap_between(prev, p, merged)
                     if p.kind == "top":
-                        ok = prev.high < p.low
+                        ok = prev.high < p.low or bool(gap_reason)
                         if not ok and return_details:
                             details.append(PenStep(seq, prev.index, prev.kind, prev.price, prev.high, prev.low,
                                                   p.index, p.kind, p.price, p.high, p.low,
@@ -1015,7 +1095,7 @@ def build_pens(fractals: List[Pivot], min_gap=2, min_swing_pct=0.0, return_detai
                                                   f"跳过(区间重叠): 底high({prev.high:.1f}) >= 顶low({p.low:.1f})", False))
                             seq += 1
                     else:
-                        ok = prev.low > p.high
+                        ok = prev.low > p.high or bool(gap_reason)
                         if not ok and return_details:
                             details.append(PenStep(seq, prev.index, prev.kind, prev.price, prev.high, prev.low,
                                                   p.index, p.kind, p.price, p.high, p.low,
@@ -1024,10 +1104,15 @@ def build_pens(fractals: List[Pivot], min_gap=2, min_swing_pct=0.0, return_detai
                             seq += 1
                     if ok:
                         if return_details:
+                            check = (
+                                f"替换: {last.kind}({last.price:.1f})→{p.kind}({p.price:.1f}); {gap_reason}"
+                                if gap_reason
+                                else f"替换: {last.kind}({last.price:.1f})→{p.kind}({p.price:.1f})"
+                            )
                             details.append(PenStep(seq, prev.index, prev.kind, prev.price, prev.high, prev.low,
                                                   p.index, p.kind, p.price, p.high, p.low,
                                                   p.index - prev.index, abs((p.price-prev.price)/prev.price*100) if prev.price else 0,
-                                                  f"替换: {last.kind}({last.price:.1f})→{p.kind}({p.price:.1f})", True))
+                                                  check, True))
                             seq += 1
                         pens[-1] = p
                         replaced = True
@@ -1048,17 +1133,21 @@ def build_pens(fractals: List[Pivot], min_gap=2, min_swing_pct=0.0, return_detai
             continue
         # 价格区间检查
         overlap = False
+        gap_reason = has_directional_gap_between(last, p, merged)
         if p.kind == "top":  # last=底, p=顶, 向上笔
             overlap = last.high >= p.low
             check_str = f"底整体high({last.high:.1f}) < 顶整体low({p.low:.1f})?"
         else:  # p.kind=="bottom", last=顶, p=底, 向下笔
             overlap = last.low <= p.high
             check_str = f"顶整体low({last.low:.1f}) > 底整体high({p.high:.1f})?"
-        if not overlap:
+        if not overlap or gap_reason:
             if return_details:
+                reason = f"成笔: {check_str} 通过"
+                if overlap and gap_reason:
+                    reason = f"成笔: 区间重叠但存在{gap_reason}"
                 details.append(PenStep(seq, last.index, last.kind, last.price, last.high, last.low,
                                       p.index, p.kind, p.price, p.high, p.low,
-                                      gap, move, f"成笔: {check_str} 通过", True))
+                                      gap, move, reason, True))
                 seq += 1
             pens.append(p)
         else:
@@ -1278,11 +1367,11 @@ def diagnose_2nd_3rd(bars,pens,center,hist):
 
 def chan_analysis(bars, merged, args):
     raw=find_fractals(merged)
-    pens,details=build_pens(raw,args.min_pivot_gap,args.min_swing_pct,return_details=True)
+    pens,details=build_pens(raw,args.min_pivot_gap,args.min_swing_pct,return_details=True,merged=merged)
     segs=find_segments(pens,merged)
     centers=find_centers(pens)
     diag=diagnose(bars,pens,centers,args.lookback)
-    fractal_records=filter_fractals_by_occupied_bars(find_fractal_candidates(merged))
+    fractal_records=filter_fractals_by_occupied_bars(find_fractal_candidates(merged), merged)
     return raw,pens,centers,segs,diag,details,fractal_records
 
 
@@ -2035,7 +2124,8 @@ def build_report_panel(stock_code, frame):
         if not valid:
             row_classes.append("filtered-fractal-row")
         status = "有效" if valid else "已过滤"
-        reason = html.escape(getattr(pv, "filter_reason", "") or "")
+        reason_text = getattr(pv, "filter_reason", "") or getattr(pv, "preserve_reason", "") or ""
+        reason = html.escape(reason_text)
         f_lines.append(
             f"<tr class=\"{' '.join(row_classes)}\" data-chart-date=\"{pv.date}\" data-fractal-row=\"{i}\"><td>{i}</td><td>{fmt_date(pv.date)}</td><td>{'顶分型' if pv.kind=='top' else '底分型'}</td>"
             f"<td>{price_with_date(pv.price, pv.date)}</td>"
