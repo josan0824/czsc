@@ -296,6 +296,55 @@ def fetch_eastmoney_trends_1m(secid: str, limit: Optional[int] = None):
         raise RuntimeError(f"东方财富分时不足40根 (实际{len(bars)}, secid={secid})")
     return code, name, bars
 
+def tencent_symbol_from_code(code: str) -> str:
+    raw = str(code).strip().upper().replace(" ", "")
+    if raw.startswith("SH"):
+        return "sh" + raw[2:]
+    if raw.startswith("SZ"):
+        return "sz" + raw[2:]
+    normalized = normalize_stock_code(raw)
+    if normalized.endswith(".SH"):
+        return "sh" + normalized[:6]
+    if normalized.endswith(".SZ"):
+        return "sz" + normalized[:6]
+    if normalized.endswith(".HK"):
+        return "hk" + normalized[:5]
+    if re.fullmatch(r"\d{6}", raw):
+        return ("sh" if raw.startswith(("6", "9", "000")) else "sz") + raw
+    if re.fullmatch(r"\d{5}", raw):
+        return "hk" + raw
+    raise ValueError(f"无法转为腾讯代码: {code}")
+
+def fetch_tencent_daily_kline(code: str, limit: Optional[int] = None):
+    if not HAS_REQUESTS: raise SystemExit("需要 requests 库")
+    symbol = tencent_symbol_from_code(code)
+    count = limit or 1000
+    url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+    params = {"param": f"{symbol},day,,,{count},qfq"}
+    resp = _session.get(url, params=params, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+    resp.raise_for_status()
+    payload = resp.json()
+    item = (((payload.get("data") or {}).get(symbol)) or {})
+    rows = item.get("qfqday") or item.get("day") or []
+    if not rows:
+        raise SystemExit(f"腾讯日线无数据 (symbol={symbol})")
+    bars = []
+    for row in rows:
+        try:
+            dt = str(row[0]).replace("-", "")[:8]
+            if not re.fullmatch(r"\d{8}", dt):
+                continue
+            open_, close, high, low = float(row[1]), float(row[2]), float(row[3]), float(row[4])
+            bars.append(Bar(symbol, dt, open_, high, low, close, float(row[5] or 0), 0))
+        except Exception:
+            continue
+    bars.sort(key=lambda x: x.trade_date)
+    bars = [b for b in bars if b.close > 0]
+    if len(bars) < 40:
+        raise SystemExit(f"腾讯日线不足40根 (实际{len(bars)}, symbol={symbol})")
+    names = {"sh000001": "上证指数", "sz399001": "深证成指", "sz399006": "创业板指", "sh000688": "科创50"}
+    return symbol, names.get(symbol, item.get("qt", {}).get(symbol, [""])[1] if item.get("qt") else ""), bars
+
 def tdx_market_code(code: str) -> Tuple[int, str]:
     norm = normalize_stock_code(code)
     if norm.endswith(".HK"):
@@ -527,7 +576,7 @@ def fetch_hk_daily_akshare(code: str, limit: int = 500):
     try:
         import akshare as ak
     except ImportError as exc:
-        raise SystemExit("东方财富历史行情接口不可用，且未安装 akshare，无法获取港股日线数据。") from exc
+        raise RuntimeError("当前环境未安装 akshare，跳过 AKShare 港股日线源") from exc
     df = ak.stock_hk_daily(symbol=hk_code)
     if df is None or len(df) == 0:
         raise SystemExit(f"akshare 未返回港股日线数据 ({hk_code})")
@@ -568,7 +617,7 @@ def fetch_csindex_daily_akshare(query: str, limit: int = 500):
     try:
         import akshare as ak
     except ImportError as exc:
-        raise SystemExit("东方财富历史行情接口不可用，且未安装 akshare，无法获取中证指数日线数据。") from exc
+        raise RuntimeError("当前环境未安装 akshare，跳过 AKShare 中证指数日线源") from exc
     start_date = "20180101"
     end_date = datetime.now().strftime("%Y%m%d")
     df = ak.stock_zh_index_hist_csindex(symbol=symbol, start_date=start_date, end_date=end_date)
@@ -606,7 +655,7 @@ def fetch_index_daily_akshare(index_code: str, limit: Optional[int] = None):
     try:
         import akshare as ak
     except ImportError as exc:
-        raise SystemExit("未安装 akshare，无法获取指数日线数据。") from exc
+        raise RuntimeError("当前环境未安装 akshare，跳过 AKShare 指数日线源") from exc
     symbol = code.lower()
     df = ak.stock_zh_index_daily(symbol=symbol)
     if df is None or len(df) == 0:
@@ -644,7 +693,7 @@ def fetch_a_daily_akshare(code: str, limit: Optional[int] = None):
     try:
         import akshare as ak
     except ImportError as exc:
-        raise SystemExit("主网络行情接口不可用，且未安装 akshare，无法获取 A 股日线数据。") from exc
+        raise RuntimeError("当前环境未安装 akshare，跳过 AKShare A 股日线源") from exc
     market_code = f"{m.group(2).lower()}{m.group(1)}"
     df = ak.stock_zh_a_daily(symbol=market_code, start_date="19900101", end_date="20500101", adjust="qfq")
     if df is None or len(df) == 0:
@@ -727,11 +776,13 @@ def fetch_stock_from_web(stock_query: str, klt: str = "101", limit: int = 500):
         attempts.extend([
             ("AKShare-新浪财经指数", lambda: fetch_index_daily_akshare(resolved_code, limit)),
             ("东方财富", lambda: fetch_kline(code_to_secid(resolved_code), klt, limit)),
+            ("腾讯日线", lambda: fetch_tencent_daily_kline(resolved_code, limit)),
         ])
     elif normalize_stock_code(resolved_code).endswith((".SH", ".SZ", ".BJ")):
         attempts.extend([
             ("AKShare-新浪财经", lambda: fetch_a_daily_akshare(resolved_code, limit)),
             ("东方财富", lambda: fetch_kline(code_to_secid(resolved_code), klt, limit)),
+            ("腾讯日线", lambda: fetch_tencent_daily_kline(resolved_code, limit)),
             ("通达信", lambda: fetch_a_daily_tdx(resolved_code, limit)),
             ("同花顺", lambda: fetch_a_daily_ths(resolved_code, limit)),
         ])
@@ -739,6 +790,7 @@ def fetch_stock_from_web(stock_query: str, klt: str = "101", limit: int = 500):
         attempts.extend([
             ("AKShare-港股", lambda: fetch_hk_daily_akshare(resolved_code, limit)),
             ("东方财富", lambda: fetch_kline(code_to_secid(resolved_code), klt, limit)),
+            ("腾讯日线", lambda: fetch_tencent_daily_kline(resolved_code, limit)),
         ])
     elif csindex_symbol_from_query(query):
         attempts.extend([
