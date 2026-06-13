@@ -1066,7 +1066,6 @@ def build_pens(fractals: List[Pivot], min_gap=2, min_swing_pct=0.0, return_detai
     """构造笔，规则：
     - 顶底交替，连续同向取极值
     - 反向分型须间隔 min_gap 根K线
-    - 价格区间检查：底分型整体high < 顶分型整体low（向上笔）；顶分型整体low > 底分型整体high（向下笔）
     - return_details=True 时额外返回笔构造步骤明细
     """
     pens = []
@@ -1081,44 +1080,15 @@ def build_pens(fractals: List[Pivot], min_gap=2, min_swing_pct=0.0, return_detai
             # 同向取极值：顶取更高，底取更低
             replaced = False
             if (p.kind=="top" and p.price>last.price) or (p.kind=="bottom" and p.price<last.price):
-                # 同向替换时检查与前一个反向分型的区间重叠
-                if len(pens) >= 2:
+                if return_details and len(pens) >= 2:
                     prev = pens[-2]
-                    ok = False
-                    gap_reason = has_directional_gap_between(prev, p, merged)
-                    if p.kind == "top":
-                        ok = prev.high < p.low or bool(gap_reason)
-                        if not ok and return_details:
-                            details.append(PenStep(seq, prev.index, prev.kind, prev.price, prev.high, prev.low,
-                                                  p.index, p.kind, p.price, p.high, p.low,
-                                                  p.index - prev.index, abs((p.price-prev.price)/prev.price*100) if prev.price else 0,
-                                                  f"跳过(区间重叠): 底high({prev.high:.1f}) >= 顶low({p.low:.1f})", False))
-                            seq += 1
-                    else:
-                        ok = prev.low > p.high or bool(gap_reason)
-                        if not ok and return_details:
-                            details.append(PenStep(seq, prev.index, prev.kind, prev.price, prev.high, prev.low,
-                                                  p.index, p.kind, p.price, p.high, p.low,
-                                                  p.index - prev.index, abs((p.price-prev.price)/prev.price*100) if prev.price else 0,
-                                                  f"跳过(区间重叠): 顶low({prev.low:.1f}) <= 底high({p.high:.1f})", False))
-                            seq += 1
-                    if ok:
-                        if return_details:
-                            check = (
-                                f"替换: {last.kind}({last.price:.1f})→{p.kind}({p.price:.1f}); {gap_reason}"
-                                if gap_reason
-                                else f"替换: {last.kind}({last.price:.1f})→{p.kind}({p.price:.1f})"
-                            )
-                            details.append(PenStep(seq, prev.index, prev.kind, prev.price, prev.high, prev.low,
-                                                  p.index, p.kind, p.price, p.high, p.low,
-                                                  p.index - prev.index, abs((p.price-prev.price)/prev.price*100) if prev.price else 0,
-                                                  check, True))
-                            seq += 1
-                        pens[-1] = p
-                        replaced = True
-                else:
-                    pens[-1] = p
-                    replaced = True
+                    details.append(PenStep(seq, prev.index, prev.kind, prev.price, prev.high, prev.low,
+                                          p.index, p.kind, p.price, p.high, p.low,
+                                          p.index - prev.index, abs((p.price-prev.price)/prev.price*100) if prev.price else 0,
+                                          f"替换: {last.kind}({last.price:.1f})→{p.kind}({p.price:.1f})", True))
+                    seq += 1
+                pens[-1] = p
+                replaced = True
             if not replaced and return_details and p.kind != last.kind:
                 pass  # better extreme but no prev to check
             continue
@@ -1132,30 +1102,12 @@ def build_pens(fractals: List[Pivot], min_gap=2, min_swing_pct=0.0, return_detai
                                       gap, move, f"跳过(间隔不足): gap={gap}<{min_gap}", False))
                 seq += 1
             continue
-        # 价格区间检查
-        overlap = False
-        if p.kind == "top":  # last=底, p=顶, 向上笔
-            overlap = last.high >= p.low
-            check_str = f"底整体high({last.high:.1f}) < 顶整体low({p.low:.1f})?"
-        else:  # p.kind=="bottom", last=顶, p=底, 向下笔
-            overlap = last.low <= p.high
-            check_str = f"顶整体low({last.low:.1f}) > 底整体high({p.high:.1f})?"
-        if not overlap or gap_reason:
-            if return_details:
-                reason = f"成笔: {check_str} 通过"
-                if overlap and gap_reason:
-                    reason = f"成笔: 区间重叠但存在{gap_reason}"
-                details.append(PenStep(seq, last.index, last.kind, last.price, last.high, last.low,
-                                      p.index, p.kind, p.price, p.high, p.low,
-                                      gap, move, reason, True))
-                seq += 1
-            pens.append(p)
-        else:
-            if return_details:
-                details.append(PenStep(seq, last.index, last.kind, last.price, last.high, last.low,
-                                      p.index, p.kind, p.price, p.high, p.low,
-                                      gap, move, f"跳过(区间重叠): {check_str} false", False))
-                seq += 1
+        if return_details:
+            details.append(PenStep(seq, last.index, last.kind, last.price, last.high, last.low,
+                                  p.index, p.kind, p.price, p.high, p.low,
+                                  gap, move, "成笔: 顶底交替且间隔通过", True))
+            seq += 1
+        pens.append(p)
     if return_details:
         return pens, details
     return pens
