@@ -1547,13 +1547,13 @@ def _make_svg_chart(stock_code, bars, pens, raw_fractals, centers, segments, tim
                 svg += f'<polygon {marker_attrs} points="{x:.1f},{yp(p.price):.1f} {x - 4:.1f},{yp(p.price) - 8:.1f} {x + 4:.1f},{yp(p.price) - 8:.1f}" fill="#1f6f8b"/>'
             else:
                 svg += f'<polygon {marker_attrs} points="{x:.1f},{yp(p.price):.1f} {x - 4:.1f},{yp(p.price) - 8:.1f} {x + 4:.1f},{yp(p.price) - 8:.1f}" fill="none" stroke="#1f6f8b" stroke-width="1.3" stroke-dasharray="2 2"/>'
-            svg += f'<text {marker_attrs} x="{x:.1f}" y="{yp(p.price) - 10:.1f}" text-anchor="middle" fill="{"#444" if valid else "#9aa4b2"}" font-size="9" dominant-baseline="bottom">{p.price:.1f}</text>'
+            svg += f'<text {marker_attrs} x="{x:.1f}" y="{yp(p.price) - 10:.1f}" text-anchor="middle" fill="{"#444" if valid else "#9aa4b2"}" font-size="9" dominant-baseline="bottom">{p.price:.2f}</text>'
         else:
             if valid:
                 svg += f'<polygon {marker_attrs} points="{x:.1f},{yp(p.price):.1f} {x - 4:.1f},{yp(p.price) + 8:.1f} {x + 4:.1f},{yp(p.price) + 8:.1f}" fill="#f79009"/>'
             else:
                 svg += f'<polygon {marker_attrs} points="{x:.1f},{yp(p.price):.1f} {x - 4:.1f},{yp(p.price) + 8:.1f} {x + 4:.1f},{yp(p.price) + 8:.1f}" fill="none" stroke="#f79009" stroke-width="1.3" stroke-dasharray="2 2"/>'
-            svg += f'<text {marker_attrs} x="{x:.1f}" y="{yp(p.price) + 18:.1f}" text-anchor="middle" fill="{"#444" if valid else "#9aa4b2"}" font-size="9" dominant-baseline="top">{p.price:.1f}</text>'
+            svg += f'<text {marker_attrs} x="{x:.1f}" y="{yp(p.price) + 18:.1f}" text-anchor="middle" fill="{"#444" if valid else "#9aa4b2"}" font-size="9" dominant-baseline="top">{p.price:.2f}</text>'
 
     svg += f'<line id="chart-selected-line-{cid}" x1="{LM}" y1="{TM}" x2="{LM}" y2="{H - BM}" stroke="#1f6f8b" stroke-width="1.5" stroke-dasharray="4 3" opacity="0.95" style="display:none;pointer-events:none;"/>'
     svg += f'<line id="chart-selected-pen-{cid}" x1="{LM}" y1="{TM}" x2="{LM}" y2="{H - BM}" stroke="#7a5af8" stroke-width="4" opacity="0.95" stroke-linecap="round" style="display:none;pointer-events:none;"/>'
