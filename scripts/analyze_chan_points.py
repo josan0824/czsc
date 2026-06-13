@@ -5,7 +5,7 @@
 """
 import argparse, csv, html, json, math, os, re, sys
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -80,12 +80,12 @@ def parse_args() -> argparse.Namespace:
                    help="数据来源；默认 web。auto 也按网络取数处理，local 仅用于显式调试本地 CSV")
     p.add_argument("--data-dir", default="/Users/josan/Desktop/czsc/Stock")
     p.add_argument("--out-dir", default="/Users/josan/Desktop/czsc/reports")
-    p.add_argument("--chart-timeframe", default="auto", choices=["auto", "5m", "30m", "daily"],
-                   help="HTML 默认展示级别；auto 按 5分钟、30分钟、日线顺序自动降级")
+    p.add_argument("--chart-timeframe", default="auto", choices=["auto", "1m", "5m", "30m", "daily"],
+                   help="HTML 默认展示级别；auto 按 1分钟、5分钟、30分钟、日线顺序自动降级")
     p.add_argument("--lookback", type=int, default=260)
     p.add_argument("--pivot-window", type=int, default=2)
     p.add_argument("--min-pivot-gap", type=int, default=3)
-    p.add_argument("--min-swing-pct", type=float, default=1.2)
+    p.add_argument("--min-swing-pct", type=float, default=0.0, help=argparse.SUPPRESS)
     p.add_argument("--with-30min", action="store_true", default=True)
     return p.parse_args()
 
@@ -253,6 +253,147 @@ def fetch_kline(secid: str, klt: str = "101", limit: Optional[int] = None):
     if len(bars) < 40: raise SystemExit(f"数据不足40根K线 (实际{len(bars)})")
     return code, name, bars
 
+def fetch_eastmoney_trends_1m(secid: str, limit: Optional[int] = None):
+    if not HAS_REQUESTS: raise RuntimeError("需要 requests 库")
+    url = "https://push2his.eastmoney.com/api/qt/stock/trends2/get"
+    params = {
+        "secid": secid,
+        "fields1": "f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11",
+        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58",
+        "ndays": "5",
+        "iscr": "0",
+        "iscca": "0",
+    }
+    resp = _session.get(url, params=params, headers={"User-Agent":"Mozilla/5.0","Referer":"https://quote.eastmoney.com/"}, timeout=20)
+    resp.raise_for_status()
+    d = resp.json().get("data")
+    if not d or not d.get("trends"):
+        raise RuntimeError(f"东方财富分时无数据 (secid={secid})")
+    code, name, trends = d.get("code", secid), d.get("name", ""), d["trends"]
+    bars = []
+    for line in trends:
+        parts = line.split(",")
+        if len(parts) < 7:
+            continue
+        try:
+            dt = re.sub(r"\D", "", parts[0])[:12]
+            if len(dt) < 12:
+                continue
+            open_ = float(parts[1])
+            close = float(parts[2])
+            high = float(parts[3])
+            low = float(parts[4])
+            volume = float(parts[5] or 0)
+            amount = float(parts[6] or 0)
+            if open_ <= 0:
+                open_ = close
+            bars.append(Bar(code, dt, open_, high, low, close, volume, amount))
+        except Exception:
+            continue
+    bars.sort(key=lambda x: x.trade_date)
+    bars = [b for b in bars if b.close > 0]
+    if len(bars) < 40:
+        raise RuntimeError(f"东方财富分时不足40根 (实际{len(bars)}, secid={secid})")
+    return code, name, bars
+
+def tdx_market_code(code: str) -> Tuple[int, str]:
+    norm = normalize_stock_code(code)
+    if norm.endswith(".HK"):
+        raise RuntimeError("通达信不支持港股分钟线")
+    raw = norm[:6] if norm.endswith((".SH", ".SZ")) else norm
+    if norm.startswith("SH"):
+        raw = norm[2:]
+        market = 1
+    elif norm.startswith("SZ"):
+        raw = norm[2:]
+        market = 0
+    elif norm.endswith(".SH") or raw.startswith(("5", "6", "9")):
+        market = 1
+    else:
+        market = 0
+    if not re.fullmatch(r"\d{6}", raw):
+        raise RuntimeError(f"通达信无法解析代码: {code}")
+    return market, raw
+
+def fetch_pytdx_1m_kline(code: str, days: int = 30):
+    try:
+        from pytdx.hq import TdxHq_API
+    except ImportError as exc:
+        raise RuntimeError("当前环境未安装 pytdx，无法使用通达信1分钟线") from exc
+
+    market, raw = tdx_market_code(code)
+    servers = [
+        ("123.125.108.14", 7709),
+        ("119.147.212.81", 7709),
+        ("202.108.253.130", 7709),
+        ("47.103.48.45", 7709),
+        ("61.152.107.141", 7709),
+        ("218.75.126.9", 7709),
+        ("124.160.88.183", 7709),
+        ("112.95.140.74", 7709),
+        ("180.153.18.170", 7709),
+        ("59.173.18.69", 7709),
+        ("14.17.75.71", 7709),
+    ]
+    cutoff = datetime.now() - timedelta(days=days)
+    best_rows = []
+    errors = []
+    for host, port in servers:
+        api = TdxHq_API(heartbeat=True, auto_retry=False, raise_exception=False)
+        try:
+            if not api.connect(host, port, time_out=3):
+                errors.append(f"{host}: 连接失败")
+                continue
+            rows = []
+            for start in range(0, 20000, 800):
+                if is_index_code(normalize_stock_code(code)):
+                    chunk = api.get_index_bars(7, market, raw, start, 800) or []
+                else:
+                    chunk = api.get_security_bars(7, market, raw, start, 800) or []
+                if not chunk:
+                    break
+                rows.extend(chunk)
+                first_dt = datetime.strptime(chunk[0]["datetime"], "%Y-%m-%d %H:%M")
+                if first_dt <= cutoff:
+                    break
+            if len(rows) > len(best_rows):
+                best_rows = rows
+            if rows:
+                break
+        except Exception as exc:
+            errors.append(f"{host}: {exc}")
+        finally:
+            try:
+                api.disconnect()
+            except Exception:
+                pass
+    if not best_rows:
+        raise RuntimeError("通达信1分钟线不可用：" + "；".join(errors[:5]))
+    dedup = {}
+    for row in best_rows:
+        try:
+            dt_obj = datetime.strptime(row["datetime"], "%Y-%m-%d %H:%M")
+            if dt_obj < cutoff or dt_obj > datetime.now() + timedelta(days=1):
+                continue
+            dt = dt_obj.strftime("%Y%m%d%H%M")
+            dedup[dt] = Bar(
+                raw,
+                dt,
+                float(row["open"]),
+                float(row["high"]),
+                float(row["low"]),
+                float(row["close"]),
+                float(row.get("vol") or 0),
+                float(row.get("amount") or 0),
+            )
+        except Exception:
+            continue
+    bars = sorted(dedup.values(), key=lambda x: x.trade_date)
+    bars = [b for b in bars if b.close > 0]
+    if len(bars) < 40:
+        raise RuntimeError(f"通达信1分钟线不足40根 (实际{len(bars)}, code={raw})")
+    return raw, "", bars
+
 def sina_symbol_from_code(code: str) -> str:
     raw = str(code).strip().upper().replace(" ", "")
     if raw.startswith("SH"):
@@ -272,7 +413,7 @@ def sina_symbol_from_code(code: str) -> str:
     raise ValueError(f"无法转为新浪代码: {code}")
 
 def fetch_sina_intraday_kline(code: str, period: str, limit: Optional[int] = None):
-    if not HAS_REQUESTS: raise SystemExit("需要 requests 库")
+    if not HAS_REQUESTS: raise RuntimeError("需要 requests 库")
     symbol = sina_symbol_from_code(code)
     url = "https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData"
     params = {"symbol": symbol, "scale": period, "ma": "no", "datalen": str(limit or 1000000)}
@@ -283,7 +424,7 @@ def fetch_sina_intraday_kline(code: str, period: str, limit: Optional[int] = Non
     except Exception:
         rows = json.loads(resp.content.decode("gbk", errors="ignore"))
     if not isinstance(rows, list) or not rows:
-        raise SystemExit(f"新浪分钟K线无数据 (symbol={symbol}, period={period})")
+        raise RuntimeError(f"新浪分钟K线无数据 (symbol={symbol}, period={period})")
     bars = []
     for row in rows:
         try:
@@ -301,7 +442,7 @@ def fetch_sina_intraday_kline(code: str, period: str, limit: Optional[int] = Non
     bars.sort(key=lambda x: x.trade_date)
     bars = [b for b in bars if b.close > 0]
     if len(bars) < 40:
-        raise SystemExit(f"新浪分钟K线不足40根 (实际{len(bars)}, symbol={symbol}, period={period})")
+        raise RuntimeError(f"新浪分钟K线不足40根 (实际{len(bars)}, symbol={symbol}, period={period})")
     return symbol, "", bars
 
 def fetch_mootdx_intraday_kline(code: str, period: str, limit: Optional[int] = None):
@@ -376,7 +517,7 @@ def fetch_baostock_intraday_kline(code: str, period: str, limit: Optional[int] =
     bars.sort(key=lambda x: x.trade_date)
     bars = [b for b in bars if b.close > 0]
     if len(bars) < 40:
-        raise SystemExit(f"baostock 分钟K线不足40根 (实际{len(bars)}, code={bs_code}, period={period})")
+        raise RuntimeError(f"baostock 分钟K线不足40根 (实际{len(bars)}, code={bs_code}, period={period})")
     return bs_code, "", bars
 
 def fetch_hk_daily_akshare(code: str, limit: int = 500):
@@ -790,11 +931,10 @@ def filter_fractals_by_occupied_bars(candidates: List[Pivot]) -> List[Pivot]:
 
 # ───────── 笔构造 ─────────
 
-def build_pens(fractals: List[Pivot], min_gap=2, min_swing_pct=0.8, return_details=False):
+def build_pens(fractals: List[Pivot], min_gap=2, min_swing_pct=0.0, return_details=False):
     """构造笔，规则：
     - 顶底交替，连续同向取极值
     - 反向分型须间隔 min_gap 根K线
-    - 满足最小波动百分比 min_swing_pct
     - 价格区间检查：底分型整体high < 顶分型整体low（向上笔）；顶分型整体low > 底分型整体high（向下笔）
     - return_details=True 时额外返回笔构造步骤明细
     """
@@ -852,13 +992,6 @@ def build_pens(fractals: List[Pivot], min_gap=2, min_swing_pct=0.8, return_detai
                 details.append(PenStep(seq, last.index, last.kind, last.price, last.high, last.low,
                                       p.index, p.kind, p.price, p.high, p.low,
                                       gap, move, f"跳过(间隔不足): gap={gap}<{min_gap}", False))
-                seq += 1
-            continue
-        if move < min_swing_pct:
-            if return_details:
-                details.append(PenStep(seq, last.index, last.kind, last.price, last.high, last.low,
-                                      p.index, p.kind, p.price, p.high, p.low,
-                                      gap, move, f"跳过(涨幅不足): {move:.2f}%<{min_swing_pct}%", False))
                 seq += 1
             continue
         # 价格区间检查
@@ -2165,6 +2298,8 @@ def fetch_intraday_frame(args, key, label, klt):
     name = name or lookup_stock_name(code, args.stock)
     attempts = [
         ("新浪分钟K线", lambda: fetch_sina_intraday_kline(code, klt, None)),
+        *([("东方财富分时", lambda: fetch_eastmoney_trends_1m(secid, None))] if key == "1m" else []),
+        *([("通达信1分钟", lambda: fetch_pytdx_1m_kline(code, 30))] if key == "1m" else []),
         ("东方财富", lambda: fetch_kline(secid, klt, None)),
         ("mootdx", lambda: fetch_mootdx_intraday_kline(code, klt, None)),
         ("baostock", lambda: fetch_baostock_intraday_kline(code, klt, None)),
@@ -2182,14 +2317,15 @@ def fetch_intraday_frame(args, key, label, klt):
                 "name": fetched_name,
                 "bars": bars,
             })
-        except Exception as exc:
+        except (Exception, SystemExit) as exc:
             candidates.append(summarize_source_candidate(provider, label, False, error=exc))
 
     if not usable:
         failures = "；".join(f"{c['provider']}: {c['error']}" for c in candidates)
         raise SystemExit(f"{label}分钟线所有来源均不可用：{failures}")
 
-    selected = sorted(usable, key=lambda x: (-len(x["bars"]), x["order"]))[0]
+    tdx_1m = next((item for item in usable if key == "1m" and item["provider"] == "通达信1分钟"), None)
+    selected = tdx_1m or sorted(usable, key=lambda x: (-len(x["bars"]), x["order"]))[0]
     display_name = name or selected.get("name") or lookup_stock_name(selected["code"], args.stock)
     source = f"{selected['provider']} ({selected['code']}, {label}, {len(selected['bars'])}根)"
     stock_code = f"{code} ({display_name})" if display_name else code
@@ -2199,10 +2335,10 @@ def fetch_intraday_frame(args, key, label, klt):
 
 
 def build_timeframes(args, daily_stock_code, daily_source, daily_bars):
-    requested = ["5m", "30m", "daily"] if args.chart_timeframe == "auto" else [args.chart_timeframe]
-    order = ["5m", "30m", "daily"]
-    labels = {"5m": "5分钟", "30m": "30分钟", "daily": "日线"}
-    klts = {"5m": "5", "30m": "30"}
+    requested = ["1m", "5m", "30m", "daily"] if args.chart_timeframe == "auto" else [args.chart_timeframe]
+    order = ["1m", "5m", "30m", "daily"]
+    labels = {"1m": "1分钟", "5m": "5分钟", "30m": "30分钟", "daily": "日线"}
+    klts = {"1m": "1", "5m": "5", "30m": "30"}
     frames_by_key = {}
     stock_code = daily_stock_code
 
