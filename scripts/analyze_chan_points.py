@@ -974,8 +974,8 @@ def find_fractals(merged: List[MergedBar]) -> List[Pivot]:
 def has_directional_gap_between(start: Pivot, end: Pivot, merged: Optional[List[MergedBar]]) -> str:
     if not merged:
         return ""
-    left = max(0, min(start.index, end.index) - 1)
-    right = min(len(merged) - 1, max(start.index, end.index) + 1)
+    left = max(0, min(start.index, end.index))
+    right = min(len(merged) - 1, max(start.index, end.index))
     for i in range(left, right):
         curr = merged[i]
         nxt = merged[i + 1]
@@ -1124,7 +1124,8 @@ def build_pens(fractals: List[Pivot], min_gap=2, min_swing_pct=0.0, return_detai
             continue
         gap = p.index - last.index
         move = abs((p.price - last.price) / last.price * 100) if last.price else 0
-        if gap < min_gap:
+        gap_reason = has_directional_gap_between(last, p, merged)
+        if gap < min_gap and not gap_reason:
             if return_details:
                 details.append(PenStep(seq, last.index, last.kind, last.price, last.high, last.low,
                                       p.index, p.kind, p.price, p.high, p.low,
@@ -1133,7 +1134,6 @@ def build_pens(fractals: List[Pivot], min_gap=2, min_swing_pct=0.0, return_detai
             continue
         # 价格区间检查
         overlap = False
-        gap_reason = has_directional_gap_between(last, p, merged)
         if p.kind == "top":  # last=底, p=顶, 向上笔
             overlap = last.high >= p.low
             check_str = f"底整体high({last.high:.1f}) < 顶整体low({p.low:.1f})?"
