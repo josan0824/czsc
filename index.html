@@ -3,33 +3,96 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="refresh" content="0; url=reports/000001.SZ__chan_points_20260614_181240.html">
-  <title>平安银行 5分钟缠论报告</title>
+  <title>缠论 1分钟报告</title>
   <style>
+    :root {
+      --ink: #172033;
+      --muted: #667085;
+      --line: #d7dee8;
+      --panel: #ffffff;
+      --accent: #176b87;
+      --bg: #f6f8fb;
+    }
+    * { box-sizing: border-box; }
     body {
       margin: 0;
       min-height: 100vh;
-      display: grid;
-      place-items: center;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      color: #172033;
-      background: #f6f8fb;
+      color: var(--ink);
+      background: var(--bg);
     }
     main {
-      padding: 32px;
-      text-align: center;
+      max-width: 880px;
+      margin: 0 auto;
+      padding: 48px 20px;
     }
-    a {
-      color: #176b87;
-      font-weight: 600;
+    h1 {
+      margin: 0 0 8px;
+      font-size: 32px;
+      letter-spacing: 0;
+    }
+    .sub {
+      margin: 0 0 28px;
+      color: var(--muted);
+      font-size: 15px;
+    }
+    .list {
+      display: grid;
+      gap: 14px;
+    }
+    a.card {
+      display: block;
+      padding: 18px 20px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      color: inherit;
+      text-decoration: none;
+    }
+    a.card:hover {
+      border-color: var(--accent);
+      box-shadow: 0 8px 20px rgba(23, 107, 135, 0.08);
+    }
+    .title {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: baseline;
+      font-size: 20px;
+      font-weight: 700;
+    }
+    .tag {
+      flex: 0 0 auto;
+      color: var(--accent);
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .meta {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.5;
     }
   </style>
 </head>
 <body>
   <main>
-    <h1>平安银行 5分钟缠论报告</h1>
-    <p>正在打开最新报告...</p>
-    <p><a href="reports/000001.SZ__chan_points_20260614_181240.html">如果没有自动跳转，点击这里查看报告</a></p>
+    <h1>缠论 1分钟报告</h1>
+    <p class="sub">数据源统一使用通达信 1 分钟接口，生成时间：2026-06-14 19:29</p>
+    <div class="list">
+      <a class="card" href="reports/000001.SZ__chan_points_20260614_192900.html">
+        <div class="title"><span>平安银行 1分钟</span><span class="tag">000001.SZ</span></div>
+        <div class="meta">通达信1分钟，4800根；有效分型23个，笔23笔。</div>
+      </a>
+      <a class="card" href="reports/SH000001__chan_points_20260614_192829.html">
+        <div class="title"><span>上证指数 1分钟</span><span class="tag">SH000001</span></div>
+        <div class="meta">通达信1分钟，4800根；有效分型183个，笔179笔。</div>
+      </a>
+      <a class="card" href="reports/000001.SZ__chan_points_20260614_181240.html">
+        <div class="title"><span>平安银行 5分钟</span><span class="tag">历史报告</span></div>
+        <div class="meta">上一版 5 分钟报告，保留用于对照。</div>
+      </a>
+    </div>
   </main>
 </body>
 </html>
