@@ -1085,12 +1085,22 @@ def build_pens(fractals: List[Pivot], min_gap=2, min_swing_pct=0.0, return_detai
                     details.append(PenStep(seq, prev.index, prev.kind, prev.price, prev.high, prev.low,
                                           p.index, p.kind, p.price, p.high, p.low,
                                           p.index - prev.index, abs((p.price-prev.price)/prev.price*100) if prev.price else 0,
-                                          f"替换: {last.kind}({last.price:.1f})→{p.kind}({p.price:.1f})", True))
+                                          f"替换: 同类分型取极值，{last.kind}({last.price:.2f})→{p.kind}({p.price:.2f})", True))
                     seq += 1
                 pens[-1] = p
                 replaced = True
-            if not replaced and return_details and p.kind != last.kind:
-                pass  # better extreme but no prev to check
+            if not replaced and return_details and len(pens) >= 2:
+                prev = pens[-2]
+                reason = (
+                    f"跳过(同类分型): 顶分型{p.price:.2f}未高于已保留顶分型{last.price:.2f}"
+                    if p.kind == "top"
+                    else f"跳过(同类分型): 底分型{p.price:.2f}未低于已保留底分型{last.price:.2f}"
+                )
+                details.append(PenStep(seq, prev.index, prev.kind, prev.price, prev.high, prev.low,
+                                      p.index, p.kind, p.price, p.high, p.low,
+                                      p.index - prev.index, abs((p.price-prev.price)/prev.price*100) if prev.price else 0,
+                                      reason, False))
+                seq += 1
             continue
         gap = p.index - last.index
         move = abs((p.price - last.price) / last.price * 100) if last.price else 0
@@ -1871,6 +1881,9 @@ function focusFractal(rowNumber, sourceElement) {{
 
 function focusChartPen(row) {{
   var penIndex = parseInt(row.getAttribute('data-pen-index'), 10);
+  if (isNaN(penIndex)) {{
+    return focusChartDate(row.getAttribute('data-chart-date'), row);
+  }}
   var pen = chartData.pens[penIndex];
   if (!pen) return false;
   var startIdx = dateToBar[normalizeKey(pen.start)];
@@ -2064,6 +2077,7 @@ def build_report_panel(stock_code, frame):
     merged_bars = frame.get("merged") or []
     raw_fractals = frame.get("raw") or []
     pens = frame.get("pens") or []
+    pen_details = frame.get("details") or []
     fractal_records = frame.get("fractal_records") or raw_fractals
 
     def price_with_date(value, date):
@@ -2105,16 +2119,66 @@ def build_report_panel(stock_code, frame):
         )
     mbrows = "".join(mb_lines)
 
+    effective_pen_keys = {
+        (start.index, end.index)
+        for start, end in zip(pens, pens[1:])
+    }
+    effective_pen_by_start_kind = {
+        (start.index, end.kind): end
+        for start, end in zip(pens, pens[1:])
+    }
     pen_lines = []
-    for i, (start, end) in enumerate(zip(pens, pens[1:]), 1):
-        direction = "向上笔" if end.price >= start.price else "向下笔"
-        row_classes = "chart-linked-row pen-row"
+    if pen_details:
+        pen_records = pen_details
+    else:
+        pen_records = [
+            PenStep(i - 1, start.index, start.kind, start.price, start.high, start.low,
+                    end.index, end.kind, end.price, end.high, end.low,
+                    max(0, end.index - start.index),
+                    abs((end.price - start.price) / start.price * 100) if start.price else 0,
+                    "成笔: 顶底交替且间隔通过", True)
+            for i, (start, end) in enumerate(zip(pens, pens[1:]), 1)
+        ]
+    valid_pen_seq = 0
+    for i, step in enumerate(pen_records, 1):
+        is_effective = bool(step.accepted and (step.prev_idx, step.curr_idx) in effective_pen_keys)
+        if is_effective:
+            pen_index = valid_pen_seq
+            valid_pen_seq += 1
+        else:
+            pen_index = ""
+        direction = "向上笔" if step.curr_price >= step.prev_price else "向下笔"
+        row_classes = ["chart-linked-row", "pen-row"]
+        if not is_effective:
+            row_classes.append("filtered-pen-row")
+        status = "有效" if is_effective else "已过滤"
+        if is_effective:
+            reason = ""
+        elif step.accepted:
+            replacement = effective_pen_by_start_kind.get((step.prev_idx, step.curr_kind))
+            if replacement and replacement.index != step.curr_idx:
+                replacement_date = fmt_date(replacement.date)
+                comparison = "更高" if step.curr_kind == "top" else "更低"
+                reason = html.escape(
+                    f"跳过(被同类极值替换): 后续{'顶分型' if step.curr_kind=='top' else '底分型'}"
+                    f"{replacement_date} {replacement.price:.2f} {comparison}，最终保留该分型"
+                )
+            else:
+                reason = html.escape("跳过(后续构造调整): 该候选笔未保留在最终笔序列")
+        else:
+            reason = html.escape(step.check)
+        data_pen_index = f' data-pen-index="{pen_index}"' if is_effective else ""
+        prev_date = fmt_date(merged_bars[step.prev_idx].date) if 0 <= step.prev_idx < len(merged_bars) else str(step.prev_idx)
+        curr_date = fmt_date(merged_bars[step.curr_idx].date) if 0 <= step.curr_idx < len(merged_bars) else str(step.curr_idx)
         pen_lines.append(
-            f"<tr class=\"{row_classes}\" data-chart-date=\"{end.date}\" data-pen-index=\"{i-1}\" data-pen-start=\"{start.date}\" data-pen-end=\"{end.date}\">"
+            f"<tr class=\"{' '.join(row_classes)}\" data-chart-date=\"{curr_date}\"{data_pen_index} data-pen-start-index=\"{step.prev_idx}\" data-pen-end-index=\"{step.curr_idx}\">"
             f"<td>{i}</td><td>{direction}</td>"
-            f"<td>{fmt_date(start.date)}</td><td>{'顶分型' if start.kind=='top' else '底分型'}</td><td>{safe(start.price)}</td>"
-            f"<td>{fmt_date(end.date)}</td><td>{'顶分型' if end.kind=='top' else '底分型'}</td><td>{safe(end.price)}</td>"
-            f"<td>{max(0, end.index - start.index)}</td><td>{safe(abs(end.price - start.price))}</td></tr>"
+            f"<td>{prev_date}</td>"
+            f"<td>{'顶分型' if step.prev_kind=='top' else '底分型'}</td><td>{safe(step.prev_price)}</td>"
+            f"<td>{curr_date}</td>"
+            f"<td>{'顶分型' if step.curr_kind=='top' else '底分型'}</td><td>{safe(step.curr_price)}</td>"
+            f"<td>{max(0, step.gap)}</td><td>{safe(abs(step.curr_price - step.prev_price))}</td>"
+            f"<td>{status}</td><td class=\"reason-cell\">{reason}</td></tr>"
         )
     penrows = "".join(pen_lines)
 
@@ -2153,11 +2217,11 @@ def build_report_panel(stock_code, frame):
 </details>
 {chart_section}
 <details open>
-<summary>笔列表（{max(0, len(pens)-1)}笔）</summary>
+<summary>笔列表（候选{len(pen_records)}笔，有效{max(0, len(pens)-1)}笔）</summary>
 <div class="table-wrap pen-table-wrap">
 <table>
-<thead><tr><th>#</th><th>方向</th><th>起点日期</th><th>起点类型</th><th>起点价格</th><th>终点日期</th><th>终点类型</th><th>终点价格</th><th>K线间隔</th><th>价差</th></tr></thead>
-<tbody>{penrows if penrows else '<tr><td colspan="10">未构造出足够的笔</td></tr>'}</tbody>
+<thead><tr><th>#</th><th>方向</th><th>起点日期</th><th>起点类型</th><th>起点价格</th><th>终点日期</th><th>终点类型</th><th>终点价格</th><th>K线间隔</th><th>价差</th><th>状态</th><th>过滤原因</th></tr></thead>
+<tbody>{penrows if penrows else '<tr><td colspan="12">未构造出足够的笔</td></tr>'}</tbody>
 </table></div>
 </details>'''
 
@@ -2231,6 +2295,7 @@ th {{ background:#f2f4f7; font-weight:700; position:sticky; top:0; }}
 tr.chart-linked-row {{ cursor:pointer; }}
 tr.absorbed-row td {{ background:#fff1f0; color:#912018; }}
 tr.filtered-fractal-row td {{ background:#fff1f0; color:#912018; }}
+tr.filtered-pen-row td {{ background:#fff1f0; color:#912018; }}
 tr.selected-row td {{ background:#e8f6fb !important; color:var(--ink); }}
 tr.selected-row td:first-child {{ box-shadow:inset 3px 0 0 var(--accent); }}
 td.process-cell {{ min-width:260px; white-space:normal; overflow-wrap:anywhere; }}
