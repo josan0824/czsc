@@ -162,6 +162,16 @@ def normalize_index_code(code: str, market: str = "") -> str:
         return f"SZ{raw}"
     raise ValueError(f"无法解析指数代码: {code}")
 
+def normalize_search_result_code(item: dict) -> str:
+    code = str(item.get("code", "") or "").strip().upper()
+    quote_id = str(item.get("quote_id", "") or "").strip().upper()
+    market = str(item.get("mkt", "") or "").strip()
+    if quote_id.startswith("116.") or market == "116" or re.fullmatch(r"\d{5}", code):
+        raw = quote_id.split(".", 1)[1] if quote_id.startswith("116.") else code
+        if re.fullmatch(r"\d{5}", raw):
+            return f"{raw}.HK"
+    return normalize_stock_code(code)
+
 def is_index_code(code: str) -> bool:
     raw = str(code).strip().upper().replace(" ", "")
     return bool(re.fullmatch(r"(SH000\d{3}|SH000688|SZ399\d{3})", raw))
@@ -199,7 +209,8 @@ def resolve_web_secid(stock_query: str) -> Tuple[str, str, str]:
     if not results:
         raise SystemExit(f"搜索不到「{query}」")
     best = results[0]
-    return code_to_secid(best["code"]), best["code"], best.get("name","")
+    resolved_code = normalize_search_result_code(best)
+    return code_to_secid(resolved_code), resolved_code.replace(".HK", ""), best.get("name","")
 
 def lookup_stock_name(code: str, query: str = "") -> str:
     known = {
@@ -348,6 +359,56 @@ def fetch_tencent_daily_kline(code: str, limit: Optional[int] = None):
         raise SystemExit(f"腾讯日线不足40根 (实际{len(bars)}, symbol={symbol})")
     names = {"sh000001": "上证指数", "sz399001": "深证成指", "sz399006": "创业板指", "sh000688": "科创50"}
     return symbol, names.get(symbol, item.get("qt", {}).get(symbol, [""])[1] if item.get("qt") else ""), bars
+
+def fetch_tencent_hk_intraday_1m(code: str, limit: Optional[int] = None):
+    norm = normalize_stock_code(code)
+    if not norm.endswith(".HK"):
+        raise RuntimeError("腾讯分时当前仅用于港股1分钟线")
+    if not HAS_REQUESTS:
+        raise RuntimeError("需要 requests 库")
+    raw = norm.replace(".HK", "")
+    symbol = f"hk{raw}"
+    url = "https://ifzq.gtimg.cn/appstock/app/day/query"
+    resp = _session.get(
+        url,
+        params={"code": symbol},
+        headers={"User-Agent": "Mozilla/5.0", "Referer": f"https://gu.qq.com/{symbol}/gp"},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    payload = resp.json()
+    days = (((payload.get("data") or {}).get(symbol) or {}).get("data") or [])
+    if not days:
+        raise RuntimeError(f"腾讯分时无数据 (symbol={symbol})")
+    rows = []
+    for day in reversed(days):
+        date = str(day.get("date", ""))
+        prev_price = None
+        prev_vol = 0.0
+        prev_amount = 0.0
+        for line in day.get("data") or []:
+            parts = str(line).split()
+            if len(parts) < 4:
+                continue
+            try:
+                minute, price = parts[0], float(parts[1])
+                cum_vol, cum_amount = float(parts[2]), float(parts[3])
+                vol = max(0.0, cum_vol - prev_vol)
+                amount = max(0.0, cum_amount - prev_amount)
+                open_ = prev_price if prev_price and prev_price > 0 else price
+                high = max(open_, price)
+                low = min(open_, price)
+                rows.append(Bar(raw, f"{date}{minute}", open_, high, low, price, vol, amount))
+                prev_price, prev_vol, prev_amount = price, cum_vol, cum_amount
+            except Exception:
+                continue
+    rows.sort(key=lambda x: x.trade_date)
+    bars = [b for b in rows if b.close > 0]
+    if limit is not None:
+        bars = bars[-limit:]
+    if len(bars) < 40:
+        raise RuntimeError(f"腾讯分时不足40根 (实际{len(bars)}, symbol={symbol})")
+    return raw, "腾讯控股", bars
 
 def tdx_market_code(code: str) -> Tuple[int, str]:
     norm = normalize_stock_code(code)
@@ -769,10 +830,10 @@ def fetch_stock_from_web(stock_query: str, klt: str = "101", limit: int = 500):
             results = eastsrch(search_query)
             if not results: raise SystemExit(f"搜索不到「{query}」")
             best = results[0]
-            if best.get("type") == "指数" or best.get("quote_id"):
+            if best.get("type") == "指数" or (best.get("quote_id") and not str(best.get("quote_id")).startswith("116.")):
                 resolved_code = normalize_index_code(best.get("quote_id") or best["code"], str(best.get("mkt","")))
             else:
-                resolved_code = normalize_stock_code(best["code"])
+                resolved_code = normalize_search_result_code(best)
             resolved_name = best.get("name","")
 
     attempts = []
@@ -1551,6 +1612,7 @@ def _make_svg_chart(stock_code, bars, pens, raw_fractals, centers, segments, tim
     <span id="zoom-label-{cid}">1\u00d7</span>
     <button id="zoom-out-btn-{cid}" title="\u7f29\u5c0f" type="button">-</button>
     <button id="reset-zoom-btn-{cid}" title="\u91cd\u7f6e\u89c6\u56fe" type="button">\u91cd\u7f6e</button>
+    <button id="clear-fractal-highlight-btn-{cid}" title="\u6e05\u7406\u865a\u7ebf\u6846" type="button">\u6e05\u7406</button>
     <span class="chart-help">\u6eda\u8f6e\u7f29\u653e \u00b7 \u62d6\u62fd\u5e73\u79fb \u00b7 \u60ac\u505c\u67e5\u770b\u8be6\u60c5</span>
   </div>
   <div class="chart-wrap" id="chc-{cid}">
@@ -1796,7 +1858,6 @@ function clearFractalHighlight() {{
 
 function showFractalHighlight(fractal) {{
   if (!fractalHighlight || !fractal || !fractal.dates) return;
-  clearFractalHighlight();
   var minX = Infinity, maxX = -Infinity, high = -Infinity, low = Infinity;
   fractal.dates.forEach(function(dateValue) {{
     var idx = dateToBar[normalizeKey(dateValue)];
@@ -1839,7 +1900,6 @@ function focusChartDate(value, row) {{
   var x = chartData.bars[idx].x;
   originX = x - viewW * 0.5;
   updateViewBox();
-  clearFractalHighlight();
   showSelectedLine(idx);
   markSelectedRow(row);
   var rect = svg.getBoundingClientRect();
@@ -1909,7 +1969,6 @@ function focusChartPen(row) {{
   }}
   originX = (x1 + x2) / 2 - viewW * 0.5;
   updateViewBox();
-  clearFractalHighlight();
   showSelectedPen(pen);
   markSelectedRow(row);
   var rect = svg.getBoundingClientRect();
@@ -2045,6 +2104,9 @@ document.getElementById('zoom-out-btn-{cid}').addEventListener('click', function
 document.getElementById('reset-zoom-btn-{cid}').addEventListener('click', function() {{
   tip.style.display = 'none';
   resetViewWindow();
+}});
+document.getElementById('clear-fractal-highlight-btn-{cid}').addEventListener('click', function() {{
+  clearFractalHighlight();
 }});
 
 wrap.addEventListener('dblclick', function(e) {{
@@ -2471,6 +2533,7 @@ def fetch_intraday_frame(args, key, label, klt):
     attempts = [
         ("新浪分钟K线", lambda: fetch_sina_intraday_kline(code, klt, None)),
         *([("东方财富分时", lambda: fetch_eastmoney_trends_1m(secid, None))] if key == "1m" else []),
+        *([("腾讯分时", lambda: fetch_tencent_hk_intraday_1m(code, None))] if key == "1m" else []),
         *([("通达信1分钟", lambda: fetch_pytdx_1m_kline(code, 30))] if key == "1m" else []),
         ("东方财富", lambda: fetch_kline(secid, klt, None)),
         ("mootdx", lambda: fetch_mootdx_intraday_kline(code, klt, None)),
