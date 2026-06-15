@@ -1,0 +1,230 @@
+{
+  "stock": "000001.SZ (平安银行)",
+  "source": "新浪分钟K线 (sz000001, 5分钟, 5049根)",
+  "analysis_level": "5分钟级别（含级别切换）",
+  "bar_count": 5049,
+  "pens": 45,
+  "centers": 7,
+  "segments": 6,
+  "diagnosis": {
+    "latest": {
+      "ts_code": "sz000001",
+      "trade_date": "202606151500",
+      "date": "2026-06-15 15:00",
+      "open": 11.06,
+      "high": 11.07,
+      "low": 11.05,
+      "close": 11.06
+    },
+    "ma_state": "女上位",
+    "ma": {
+      "ma5": 11.04599999999993,
+      "ma10": 11.032000000000005,
+      "ma20": 11.031499999999998,
+      "ma60": 11.114666666666652
+    },
+    "macd": {
+      "dif": -0.011597532134683064,
+      "dea": -0.020134542599231798,
+      "hist": 0.017074020929097468
+    },
+    "latest_center": {
+      "start_index": 1289,
+      "end_index": 1437,
+      "start_date": "202606021005",
+      "end_date": "202606120945",
+      "zd": 11.08,
+      "zg": 11.1,
+      "gg": 11.39,
+      "dd": 10.77,
+      "direction": "down"
+    },
+    "centers": [],
+    "pivots": [],
+    "signals": [
+      {
+        "label": "未确认第一类买点",
+        "score": 2,
+        "confidence": "低",
+        "evidence": [
+          "位于中枢下方或跌破ZD=11.08"
+        ],
+        "counter_evidence": [
+          "底分型距离较远"
+        ],
+        "levels": {
+          "ZD": 11.08,
+          "ZG": 11.1
+        }
+      },
+      {
+        "label": "未确认第一类卖点",
+        "score": 0,
+        "confidence": "低",
+        "evidence": [],
+        "counter_evidence": [
+          "未处于中枢上方",
+          "顶分型距离较远"
+        ],
+        "levels": {
+          "ZD": 11.08,
+          "ZG": 11.1
+        }
+      },
+      {
+        "label": "未确认第三类买点",
+        "score": 0,
+        "confidence": "低",
+        "evidence": [],
+        "counter_evidence": [
+          "未识别离开中枢的顶分型"
+        ],
+        "levels": {
+          "ZG": 11.1,
+          "ZD": 11.08
+        }
+      },
+      {
+        "label": "未确认第三类卖点",
+        "score": 0,
+        "confidence": "低",
+        "evidence": [],
+        "counter_evidence": [
+          "未识别离开中枢的底分型"
+        ],
+        "levels": {
+          "ZG": 11.1,
+          "ZD": 11.08
+        }
+      },
+      {
+        "label": "未确认第二类买点",
+        "score": 0,
+        "confidence": "低",
+        "evidence": [],
+        "counter_evidence": [
+          "未形成底-顶-底结构"
+        ],
+        "levels": {}
+      },
+      {
+        "label": "未确认第二类卖点",
+        "score": 0,
+        "confidence": "低",
+        "evidence": [],
+        "counter_evidence": [
+          "未形成顶-底-顶结构"
+        ],
+        "levels": {}
+      }
+    ],
+    "current": {
+      "label": "当前无确认的一二三类买卖点",
+      "score": 2,
+      "confidence": "低",
+      "evidence": [
+        "位于中枢下方或跌破ZD=11.08"
+      ],
+      "counter_evidence": [
+        "底分型距离较远"
+      ],
+      "levels": {
+        "ZD": 11.08,
+        "ZG": 11.1
+      }
+    }
+  },
+  "html_report": "/Users/josan/Desktop/czsc_codex/reports/000001.SZ__chan_points_20260615_204441.html",
+  "default_timeframe": "5m",
+  "timeframes": [
+    {
+      "key": "1m",
+      "label": "1分钟",
+      "available": false,
+      "source": "",
+      "bar_count": 0,
+      "merged_count": 0,
+      "fractal_candidate_count": 0,
+      "valid_fractal_count": 0,
+      "source_candidates": [],
+      "error": "未请求该级别"
+    },
+    {
+      "key": "5m",
+      "label": "5分钟",
+      "available": true,
+      "source": "新浪分钟K线 (sz000001, 5分钟, 5049根)",
+      "bar_count": 5049,
+      "merged_count": 1476,
+      "fractal_candidate_count": 821,
+      "valid_fractal_count": 45,
+      "source_candidates": [
+        {
+          "provider": "新浪分钟K线",
+          "label": "5分钟",
+          "available": true,
+          "bar_count": 5049,
+          "code": "sz000001",
+          "status": "可用，5049根",
+          "selected": true,
+          "error": ""
+        },
+        {
+          "provider": "东方财富",
+          "label": "5分钟",
+          "available": false,
+          "bar_count": 0,
+          "code": "",
+          "status": "不可用",
+          "selected": false,
+          "error": "('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
+        },
+        {
+          "provider": "mootdx",
+          "label": "5分钟",
+          "available": false,
+          "bar_count": 0,
+          "code": "",
+          "status": "不可用",
+          "selected": false,
+          "error": "当前环境未安装 mootdx，无法使用通达信分钟线"
+        },
+        {
+          "provider": "baostock",
+          "label": "5分钟",
+          "available": false,
+          "bar_count": 0,
+          "code": "",
+          "status": "不可用",
+          "selected": false,
+          "error": "当前环境未安装 baostock，无法使用 baostock 分钟线"
+        }
+      ],
+      "error": ""
+    },
+    {
+      "key": "30m",
+      "label": "30分钟",
+      "available": false,
+      "source": "",
+      "bar_count": 0,
+      "merged_count": 0,
+      "fractal_candidate_count": 0,
+      "valid_fractal_count": 0,
+      "source_candidates": [],
+      "error": "未请求该级别"
+    },
+    {
+      "key": "daily",
+      "label": "日线",
+      "available": false,
+      "source": "",
+      "bar_count": 0,
+      "merged_count": 0,
+      "fractal_candidate_count": 0,
+      "valid_fractal_count": 0,
+      "source_candidates": [],
+      "error": "未请求该级别"
+    }
+  ]
+}
