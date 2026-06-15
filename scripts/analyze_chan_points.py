@@ -11,7 +11,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 import warnings
 warnings.filterwarnings("ignore", message=".*character detection.*")
-REVERSE_GAP_THRESHOLD = 0.003
+REVERSE_GAP_THRESHOLD = 0.006
 try:
     import requests
     HAS_REQUESTS = True
