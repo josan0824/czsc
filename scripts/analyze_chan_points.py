@@ -57,6 +57,8 @@ class MergedBar:
     high: float; low: float; open: float; close: float; date: str; vol: float; amount: float
     absorbed_dates: List[str] = None
     absorb_processes: List[str] = None
+    raw_start: int = 0
+    raw_end: int = 0
 
 @dataclass
 class Segment:
@@ -880,10 +882,10 @@ def read_bars(path: Path) -> List[Bar]:
 
 def merge_containing_bars(bars: List[Bar]) -> List[MergedBar]:
     if not bars: return []
-    p = [MergedBar(bars[0].high,bars[0].low,bars[0].open,bars[0].close,bars[0].trade_date,bars[0].vol,bars[0].amount,[],[])]
+    p = [MergedBar(bars[0].high,bars[0].low,bars[0].open,bars[0].close,bars[0].trade_date,bars[0].vol,bars[0].amount,[],[],0,0)]
     i = 1
     while i < len(bars):
-        mb = MergedBar(bars[i].high,bars[i].low,bars[i].open,bars[i].close,bars[i].trade_date,bars[i].vol,bars[i].amount,[],[])
+        mb = MergedBar(bars[i].high,bars[i].low,bars[i].open,bars[i].close,bars[i].trade_date,bars[i].vol,bars[i].amount,[],[],i,i)
         last = p[-1]
         if (mb.high <= last.high and mb.low >= last.low) or (last.high <= mb.high and last.low >= mb.low):
             up = len(p) < 2 or last.high >= p[-2].high
@@ -891,8 +893,9 @@ def merge_containing_bars(bars: List[Bar]) -> List[MergedBar]:
             processes = list(last.absorb_processes or [])
             process = "向上处理：取高高（最高取高、最低取高）" if up else "向下处理：取低低（最高取低、最低取低）"
             processes.append(f"{process}（处理{fmt_date(last.date)}）")
-            if up: p[-1] = MergedBar(max(last.high,mb.high),max(last.low,mb.low),last.open,mb.close,mb.date,last.vol+mb.vol,last.amount+mb.amount,absorbed,processes)
-            else: p[-1] = MergedBar(min(last.high,mb.high),min(last.low,mb.low),last.open,mb.close,mb.date,last.vol+mb.vol,last.amount+mb.amount,absorbed,processes)
+            raw_start, raw_end = min(last.raw_start, mb.raw_start), max(last.raw_end, mb.raw_end)
+            if up: p[-1] = MergedBar(max(last.high,mb.high),max(last.low,mb.low),last.open,mb.close,mb.date,last.vol+mb.vol,last.amount+mb.amount,absorbed,processes,raw_start,raw_end)
+            else: p[-1] = MergedBar(min(last.high,mb.high),min(last.low,mb.low),last.open,mb.close,mb.date,last.vol+mb.vol,last.amount+mb.amount,absorbed,processes,raw_start,raw_end)
         else: p.append(mb)
         i += 1
     return p
@@ -919,75 +922,85 @@ def find_fractal_candidates(merged: List[MergedBar]) -> List[Pivot]:
     candidates.sort(key=lambda p: (p.index, 0 if p.kind=="bottom" else 1))
     return candidates
 
-def has_down_gap(prev: MergedBar, curr: MergedBar, threshold: float = REVERSE_GAP_THRESHOLD) -> bool:
+def has_down_gap(prev: Bar, curr: Bar, threshold: float = REVERSE_GAP_THRESHOLD) -> bool:
     return prev.low > 0 and prev.low > curr.high and (prev.low - curr.high) / prev.low > threshold
 
-def has_up_gap(prev: MergedBar, curr: MergedBar, threshold: float = REVERSE_GAP_THRESHOLD) -> bool:
+def has_up_gap(prev: Bar, curr: Bar, threshold: float = REVERSE_GAP_THRESHOLD) -> bool:
     return prev.high > 0 and curr.low > prev.high and (curr.low - prev.high) / prev.high > threshold
 
-def reverse_gap_preserve_reason(p: Pivot, merged: Optional[List[MergedBar]]) -> str:
-    if not merged or p.index + 1 >= len(merged):
+def raw_gap_ranges_for_merged_window(merged: List[MergedBar], start: int, end: int) -> Tuple[int, int]:
+    start = max(0, min(start, len(merged) - 1))
+    end = max(0, min(end, len(merged) - 1))
+    if start > end:
+        start, end = end, start
+    return merged[start].raw_start, merged[end].raw_end
+
+def reverse_gap_preserve_reason(p: Pivot, merged: Optional[List[MergedBar]], raw_bars: Optional[List[Bar]] = None) -> str:
+    if not merged or not raw_bars or p.index + 1 >= len(merged):
         return ""
-    for i in range(p.index, min(len(merged) - 1, p.index + 2)):
-        curr = merged[i]
-        nxt = merged[i + 1]
+    raw_start, raw_end = raw_gap_ranges_for_merged_window(merged, p.index, min(len(merged) - 1, p.index + 2))
+    for i in range(raw_start, min(raw_end, len(raw_bars) - 1)):
+        curr = raw_bars[i]
+        nxt = raw_bars[i + 1]
         if p.kind == "top" and has_down_gap(curr, nxt):
             pct = (curr.low - nxt.high) / curr.low * 100
             return (
-                f"反向缺口保护：顶分型后{fmt_date(curr.date)}→{fmt_date(nxt.date)}"
+                f"反向缺口保护：顶分型后原始K线{fmt_date(curr.trade_date)}→{fmt_date(nxt.trade_date)}"
                 f"向下缺口{pct:.2f}%"
             )
         if p.kind == "bottom" and has_up_gap(curr, nxt):
             pct = (nxt.low - curr.high) / curr.high * 100
             return (
-                f"反向缺口保护：底分型后{fmt_date(curr.date)}→{fmt_date(nxt.date)}"
+                f"反向缺口保护：底分型后原始K线{fmt_date(curr.trade_date)}→{fmt_date(nxt.trade_date)}"
                 f"向上缺口{pct:.2f}%"
             )
     return ""
 
-def reverse_gap_from_previous_reason(prev_pivot: Pivot, p: Pivot, merged: Optional[List[MergedBar]]) -> str:
-    if not merged:
+def reverse_gap_from_previous_reason(prev_pivot: Pivot, p: Pivot, merged: Optional[List[MergedBar]], raw_bars: Optional[List[Bar]] = None) -> str:
+    if not merged or not raw_bars:
         return ""
     start = max(0, p.index - 1)
     end = min(len(merged) - 1, p.index + 1)
-    for i in range(start, end):
-        curr = merged[i]
-        nxt = merged[i + 1]
+    raw_start, raw_end = raw_gap_ranges_for_merged_window(merged, start, end)
+    for i in range(raw_start, min(raw_end, len(raw_bars) - 1)):
+        curr = raw_bars[i]
+        nxt = raw_bars[i + 1]
         if prev_pivot.kind == "top" and has_down_gap(curr, nxt):
             pct = (curr.low - nxt.high) / curr.low * 100
             return (
                 f"反向缺口保护：前一顶分型{fmt_date(prev_pivot.date)}后，"
-                f"{fmt_date(curr.date)}→{fmt_date(nxt.date)}向下缺口{pct:.2f}%"
+                f"原始K线{fmt_date(curr.trade_date)}→{fmt_date(nxt.trade_date)}向下缺口{pct:.2f}%"
             )
         if prev_pivot.kind == "bottom" and has_up_gap(curr, nxt):
             pct = (nxt.low - curr.high) / curr.high * 100
             return (
                 f"反向缺口保护：前一底分型{fmt_date(prev_pivot.date)}后，"
-                f"{fmt_date(curr.date)}→{fmt_date(nxt.date)}向上缺口{pct:.2f}%"
+                f"原始K线{fmt_date(curr.trade_date)}→{fmt_date(nxt.trade_date)}向上缺口{pct:.2f}%"
             )
     return ""
 
-def find_fractals(merged: List[MergedBar]) -> List[Pivot]:
-    records = filter_fractals_by_occupied_bars(find_fractal_candidates(merged), merged)
+def find_fractals(merged: List[MergedBar], raw_bars: Optional[List[Bar]] = None) -> List[Pivot]:
+    records = filter_fractals_by_occupied_bars(find_fractal_candidates(merged), merged, raw_bars)
     return [p for p in records if p.valid]
 
-def has_directional_gap_between(start: Pivot, end: Pivot, merged: Optional[List[MergedBar]]) -> str:
-    if not merged:
+def has_directional_gap_between(start: Pivot, end: Pivot, merged: Optional[List[MergedBar]], raw_bars: Optional[List[Bar]] = None) -> str:
+    if not merged or not raw_bars:
         return ""
     left = max(0, min(start.index, end.index))
     right = min(len(merged) - 1, max(start.index, end.index))
-    for i in range(left, right):
-        curr = merged[i]
-        nxt = merged[i + 1]
+    raw_start, raw_end = raw_gap_ranges_for_merged_window(merged, left, right)
+    for i in range(raw_start, min(raw_end, len(raw_bars) - 1)):
+        curr = raw_bars[i]
+        nxt = raw_bars[i + 1]
         if start.kind == "top" and end.kind == "bottom" and has_down_gap(curr, nxt):
             pct = (curr.low - nxt.high) / curr.low * 100
-            return f"向下缺口: {fmt_date(curr.date)}→{fmt_date(nxt.date)} {pct:.2f}%"
+            return f"向下缺口: 原始K线{fmt_date(curr.trade_date)}→{fmt_date(nxt.trade_date)} {pct:.2f}%"
         if start.kind == "bottom" and end.kind == "top" and has_up_gap(curr, nxt):
             pct = (nxt.low - curr.high) / curr.high * 100
-            return f"向上缺口: {fmt_date(curr.date)}→{fmt_date(nxt.date)} {pct:.2f}%"
+            return f"向上缺口: 原始K线{fmt_date(curr.trade_date)}→{fmt_date(nxt.trade_date)} {pct:.2f}%"
     return ""
 
-def filter_fractals_by_occupied_bars(candidates: List[Pivot], merged: Optional[List[MergedBar]] = None) -> List[Pivot]:
+def filter_fractals_by_occupied_bars(candidates: List[Pivot], merged: Optional[List[MergedBar]] = None, raw_bars: Optional[List[Bar]] = None) -> List[Pivot]:
     """确定分型序列。
 
     - 每个分型占用3根K线，两个分型之间至少隔1根独立K线。
@@ -1000,13 +1013,13 @@ def filter_fractals_by_occupied_bars(candidates: List[Pivot], merged: Optional[L
     for p in candidates:
         p.valid = True
         p.filter_reason = ""
-        p.preserve_reason = reverse_gap_preserve_reason(p, merged)
+        p.preserve_reason = reverse_gap_preserve_reason(p, merged, raw_bars)
         if not pivots:
             pivots.append(p)
             continue
         last = pivots[-1]
         if not p.preserve_reason:
-            p.preserve_reason = reverse_gap_from_previous_reason(last, p, merged)
+            p.preserve_reason = reverse_gap_from_previous_reason(last, p, merged, raw_bars)
         if p.kind == last.kind:
             better_top = p.kind == "top" and p.price > last.price
             better_bottom = p.kind == "bottom" and p.price < last.price
@@ -1062,7 +1075,7 @@ def filter_fractals_by_occupied_bars(candidates: List[Pivot], merged: Optional[L
 
 # ───────── 笔构造 ─────────
 
-def build_pens(fractals: List[Pivot], min_gap=2, min_swing_pct=0.0, return_details=False, merged: Optional[List[MergedBar]] = None):
+def build_pens(fractals: List[Pivot], min_gap=2, min_swing_pct=0.0, return_details=False, merged: Optional[List[MergedBar]] = None, raw_bars: Optional[List[Bar]] = None):
     """构造笔，规则：
     - 顶底交替，连续同向取极值
     - 反向分型须间隔 min_gap 根K线
@@ -1104,7 +1117,7 @@ def build_pens(fractals: List[Pivot], min_gap=2, min_swing_pct=0.0, return_detai
             continue
         gap = p.index - last.index
         move = abs((p.price - last.price) / last.price * 100) if last.price else 0
-        gap_reason = has_directional_gap_between(last, p, merged)
+        gap_reason = has_directional_gap_between(last, p, merged, raw_bars)
         if gap < min_gap and not gap_reason:
             if return_details:
                 details.append(PenStep(seq, last.index, last.kind, last.price, last.high, last.low,
@@ -1328,12 +1341,12 @@ def diagnose_2nd_3rd(bars,pens,center,hist):
 # ───────── 完整缠论分析管道 ─────────
 
 def chan_analysis(bars, merged, args):
-    raw=find_fractals(merged)
-    pens,details=build_pens(raw,args.min_pivot_gap,args.min_swing_pct,return_details=True,merged=merged)
+    raw=find_fractals(merged, bars)
+    pens,details=build_pens(raw,args.min_pivot_gap,args.min_swing_pct,return_details=True,merged=merged,raw_bars=bars)
     segs=find_segments(pens,merged)
     centers=find_centers(pens)
     diag=diagnose(bars,pens,centers,args.lookback)
-    fractal_records=filter_fractals_by_occupied_bars(find_fractal_candidates(merged), merged)
+    fractal_records=filter_fractals_by_occupied_bars(find_fractal_candidates(merged), merged, bars)
     return raw,pens,centers,segs,diag,details,fractal_records
 
 
