@@ -46,6 +46,7 @@ class Pivot:
     valid: bool = True
     filter_reason: str = ""
     preserve_reason: str = ""
+    replaced_reason: str = ""
 
 @dataclass
 class Center:
@@ -1066,14 +1067,59 @@ def filter_fractals_by_occupied_bars(candidates: List[Pivot], merged: Optional[L
 
     - 每个分型占用3根K线，两个分型之间至少隔1根独立K线。
     - 同类连续分型只保留更极端者：顶取更高，底取更低。
-    - 底后顶：顶分型的底不能低于/等于前底分型的顶。
-    - 顶后底：底分型的顶不能高于/等于前顶分型的底。
+    - 底后顶若价格区间重叠，则当前顶分型需与上一个顶分型比较：当前更高则舍弃上一个顶分型，
+      并在上一个有效底分型和上上个有效底分型中舍弃低点更高者，否则舍弃当前顶分型。
+    - 顶后底若价格区间重叠，则当前底分型需与上一个底分型比较：当前更低则舍弃上一个底分型，
+      并在上一个有效顶分型和上上个有效顶分型中舍弃高点更低者，否则舍弃当前底分型。
     - 若待过滤分型包含反向缺口，则保留该分型。
     """
     pivots = []
+
+    def previous_same_kind(kind: str) -> Optional[Pivot]:
+        for item in reversed(pivots[:-1]):
+            if item.kind == kind:
+                return item
+        return None
+
+    def previous_two_of_kind(kind: str) -> List[Pivot]:
+        items = []
+        for item in reversed(pivots):
+            if item.kind == kind:
+                items.append(item)
+                if len(items) == 2:
+                    break
+        return items
+
+    def weaker_pivot(a: Pivot, b: Pivot) -> Pivot:
+        if a.kind == "bottom":
+            return a if a.low > b.low else b
+        return a if a.high < b.high else b
+
+    def remove_pivot(item: Pivot):
+        if item in pivots:
+            pivots.remove(item)
+
+    def replace_with_overlap_extreme(p: Pivot, previous_same: Pivot, last: Pivot, reason: str):
+        opposite_kind = last.kind
+        opposite_candidates = previous_two_of_kind(opposite_kind)
+        opposite_to_remove = weaker_pivot(opposite_candidates[0], opposite_candidates[1]) if len(opposite_candidates) >= 2 else last
+        previous_same.valid = False
+        previous_same.filter_reason = reason
+        previous_same.preserve_reason = ""
+        previous_same.replaced_reason = f"被{fmt_date(p.date)}同类更极端分型替换"
+        opposite_to_remove.valid = False
+        opposite_to_remove.filter_reason = reason
+        opposite_to_remove.preserve_reason = ""
+        opposite_to_remove.replaced_reason = f"因{fmt_date(p.date)}重合替换，舍弃两个相邻{opposite_kind}分型中较弱者"
+        p.preserve_reason = ""
+        remove_pivot(previous_same)
+        remove_pivot(opposite_to_remove)
+        pivots.append(p)
+
     for p in candidates:
         p.valid = True
         p.filter_reason = ""
+        p.replaced_reason = ""
         p.preserve_reason = reverse_gap_preserve_reason(p, merged, raw_bars)
         if not pivots:
             pivots.append(p)
@@ -1103,33 +1149,55 @@ def filter_fractals_by_occupied_bars(candidates: List[Pivot], merged: Optional[L
                 p.preserve_reason = ""
             continue
 
+        def handle_overlap(reason_prefix: str) -> bool:
+            previous_same = previous_same_kind(p.kind)
+            if previous_same is None:
+                if p.preserve_reason:
+                    pivots.append(p)
+                else:
+                    p.valid = False
+                    p.filter_reason = f"{reason_prefix}，且无上一个同类分型可比较"
+                    p.preserve_reason = ""
+                return True
+            better_top = p.kind == "top" and p.price > previous_same.price
+            better_bottom = p.kind == "bottom" and p.price < previous_same.price
+            if better_top or better_bottom:
+                opposite_kind_name = "底分型" if p.kind == "top" else "顶分型"
+                reason = (
+                    f"{reason_prefix}；当前顶分型{fmt_date(p.date)}更高于上一个顶分型{fmt_date(previous_same.date)}，"
+                    f"舍弃上一个顶分型，并在最近两个有效{opposite_kind_name}中舍弃低点更高者"
+                    if p.kind == "top"
+                    else f"{reason_prefix}；当前底分型{fmt_date(p.date)}更低于上一个底分型{fmt_date(previous_same.date)}，"
+                    f"舍弃上一个底分型，并在最近两个有效{opposite_kind_name}中舍弃高点更低者"
+                )
+                replace_with_overlap_extreme(p, previous_same, last, reason)
+            else:
+                p.valid = False
+                p.filter_reason = (
+                    f"{reason_prefix}；当前顶分型未高于上一个顶分型{fmt_date(previous_same.date)}，舍弃当前顶分型"
+                    if p.kind == "top"
+                    else f"{reason_prefix}；当前底分型未低于上一个底分型{fmt_date(previous_same.date)}，舍弃当前底分型"
+                )
+                p.preserve_reason = ""
+            return True
+
         last_end = last.index + 1
         curr_start = p.index - 1
         if curr_start < last_end + 2:
-            if p.preserve_reason:
-                pivots.append(p)
-            else:
-                p.valid = False
-                p.filter_reason = f"分型占用区间与前一有效分型{fmt_date(last.date)}重叠，或中间不足1根独立K线"
+            handle_overlap(f"分型占用区间与前一有效分型{fmt_date(last.date)}重叠，或中间不足1根独立K线")
             continue
 
         if last.kind == "bottom" and p.kind == "top":
             if p.low > last.high:
                 pivots.append(p)
-            elif p.preserve_reason:
-                pivots.append(p)
             else:
-                p.valid = False
-                p.filter_reason = f"顶分型最低{p.low:.2f}未高于前一底分型{fmt_date(last.date)}最高{last.high:.2f}，区间重叠"
+                handle_overlap(f"顶分型最低{p.low:.2f}未高于前一底分型{fmt_date(last.date)}最高{last.high:.2f}，区间重叠")
             continue
         if last.kind == "top" and p.kind == "bottom":
             if p.high < last.low:
                 pivots.append(p)
-            elif p.preserve_reason:
-                pivots.append(p)
             else:
-                p.valid = False
-                p.filter_reason = f"底分型最高{p.high:.2f}未低于前一顶分型{fmt_date(last.date)}最低{last.low:.2f}，区间重叠"
+                handle_overlap(f"底分型最高{p.high:.2f}未低于前一顶分型{fmt_date(last.date)}最低{last.low:.2f}，区间重叠")
             continue
     return candidates
 
@@ -2165,7 +2233,7 @@ def build_report_panel(stock_code, frame):
         if not valid:
             row_classes.append("filtered-fractal-row")
         status = "有效" if valid else "已过滤"
-        reason_text = getattr(pv, "filter_reason", "") or getattr(pv, "preserve_reason", "") or ""
+        reason_text = getattr(pv, "filter_reason", "") or getattr(pv, "replaced_reason", "") or getattr(pv, "preserve_reason", "") or ""
         reason = html.escape(reason_text)
         f_lines.append(
             f"<tr class=\"{' '.join(row_classes)}\" data-chart-date=\"{pv.date}\" data-fractal-row=\"{i}\"><td>{i}</td><td>{fmt_date(pv.date)}</td><td>{'顶分型' if pv.kind=='top' else '底分型'}</td>"
