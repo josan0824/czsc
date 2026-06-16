@@ -4,7 +4,7 @@
 支持：日线/30分钟数据、K线包含处理、分型识别、内联SVG图表
 """
 import argparse, csv, html, json, math, os, re, sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -47,6 +47,8 @@ class Pivot:
     filter_reason: str = ""
     preserve_reason: str = ""
     replaced_reason: str = ""
+    note_reason: str = ""
+    process_notes: List[str] = field(default_factory=list)
 
 @dataclass
 class Center:
@@ -1075,6 +1077,10 @@ def filter_fractals_by_occupied_bars(candidates: List[Pivot], merged: Optional[L
     """
     pivots = []
 
+    def add_process(pivot: Pivot, note: str):
+        if note:
+            pivot.process_notes.append(note)
+
     def previous_same_kind(kind: str) -> Optional[Pivot]:
         for item in reversed(pivots[:-1]):
             if item.kind == kind:
@@ -1108,14 +1114,23 @@ def filter_fractals_by_occupied_bars(candidates: List[Pivot], merged: Optional[L
         return None
 
     def mark_same_kind_merged(discarded: Pivot, kept: Pivot):
-        discarded.valid = False
-        discarded.filter_reason = ""
-        discarded.preserve_reason = ""
-        discarded.replaced_reason = (
+        discarded_note = (
             f"相邻顶分型{fmt_date(kept.date)}更高，按同类极值归并舍弃本顶分型"
             if discarded.kind == "top"
             else f"相邻底分型{fmt_date(kept.date)}更低，按同类极值归并舍弃本底分型"
         )
+        kept_note = (
+            f"与相邻顶分型{fmt_date(discarded.date)}同类归并后保留：本顶分型更高"
+            if kept.kind == "top"
+            else f"与相邻底分型{fmt_date(discarded.date)}同类归并后保留：本底分型更低"
+        )
+        discarded.valid = False
+        discarded.filter_reason = ""
+        discarded.preserve_reason = ""
+        discarded.replaced_reason = discarded_note
+        kept.note_reason = kept_note
+        add_process(discarded, discarded_note)
+        add_process(kept, kept_note)
 
     def normalize_same_kind_neighbors(anchor: Optional[Pivot]) -> Optional[Pivot]:
         """向左归并相邻同类分型，顶取高、底取低。"""
@@ -1139,15 +1154,26 @@ def filter_fractals_by_occupied_bars(candidates: List[Pivot], merged: Optional[L
         opposite_kind = last.kind
         opposite_candidates = previous_two_of_kind(opposite_kind)
         opposite_to_remove = weaker_pivot(opposite_candidates[0], opposite_candidates[1]) if len(opposite_candidates) >= 2 else last
-        opposite_to_remove.valid = False
-        opposite_to_remove.filter_reason = ""
-        opposite_to_remove.preserve_reason = ""
-        opposite_to_remove.replaced_reason = (
+        overlap_note = (
+            f"与前一有效底分型{fmt_date(last.date)}区间重叠；当前顶分型高于上一个顶分型，"
+            f"先舍弃较弱底分型{fmt_date(opposite_to_remove.date)}，再按同类极值归并后暂时保留"
+            if p.kind == "top"
+            else f"与前一有效顶分型{fmt_date(last.date)}区间重叠；当前底分型低于上一个底分型，"
+            f"先舍弃较弱顶分型{fmt_date(opposite_to_remove.date)}，再按同类极值归并后暂时保留"
+        )
+        remove_note = (
             f"后续顶分型{fmt_date(p.date)}触发重合替换；本底分型是两个相邻底分型中低点较高者，按较弱反向分型舍弃"
             if opposite_kind == "bottom"
             else f"后续底分型{fmt_date(p.date)}触发重合替换；本顶分型是两个相邻顶分型中高点较低者，按较弱反向分型舍弃"
         )
+        opposite_to_remove.valid = False
+        opposite_to_remove.filter_reason = ""
+        opposite_to_remove.preserve_reason = ""
+        opposite_to_remove.replaced_reason = remove_note
+        add_process(opposite_to_remove, remove_note)
         p.preserve_reason = ""
+        p.note_reason = overlap_note
+        add_process(p, overlap_note)
         removed_idx = remove_pivot(opposite_to_remove)
         if removed_idx is not None:
             anchor = pivots[removed_idx] if removed_idx < len(pivots) else (pivots[-1] if pivots else None)
@@ -1159,32 +1185,49 @@ def filter_fractals_by_occupied_bars(candidates: List[Pivot], merged: Optional[L
         p.valid = True
         p.filter_reason = ""
         p.replaced_reason = ""
+        p.note_reason = ""
+        p.process_notes = []
+        add_process(p, f"识别到{'顶分型' if p.kind == 'top' else '底分型'}形态：分型价格{p.price:.2f}，高点{p.high:.2f}，低点{p.low:.2f}")
         p.preserve_reason = reverse_gap_preserve_reason(p, merged, raw_bars)
         if not pivots:
+            add_process(p, "作为首个有效分型保留")
             pivots.append(p)
             continue
         last = pivots[-1]
         if not p.preserve_reason:
             p.preserve_reason = reverse_gap_from_previous_reason(last, p, merged, raw_bars)
+        if p.preserve_reason:
+            add_process(p, p.preserve_reason)
         if p.kind == last.kind:
             better_top = p.kind == "top" and p.price > last.price
             better_bottom = p.kind == "bottom" and p.price < last.price
             if better_top or better_bottom:
-                last.valid = False
-                last.filter_reason = (
+                last_note = (
                     f"同类分型，后续顶分型更高，保留{fmt_date(p.date)}"
                     if p.kind == "top"
                     else f"同类分型，后续底分型更低，保留{fmt_date(p.date)}"
                 )
+                keep_note = (
+                    f"同类顶分型替换{fmt_date(last.date)}后保留：本顶分型更高"
+                    if p.kind == "top"
+                    else f"同类底分型替换{fmt_date(last.date)}后保留：本底分型更低"
+                )
+                last.valid = False
+                last.filter_reason = last_note
+                p.note_reason = keep_note
+                add_process(last, last_note)
+                add_process(p, keep_note)
                 p.preserve_reason = ""
                 pivots[-1] = p
             else:
-                p.valid = False
-                p.filter_reason = (
+                filter_note = (
                     f"同类分型，顶分型未高于已保留顶分型{fmt_date(last.date)}"
                     if p.kind == "top"
                     else f"同类分型，底分型未低于已保留底分型{fmt_date(last.date)}"
                 )
+                p.valid = False
+                p.filter_reason = filter_note
+                add_process(p, filter_note)
                 p.preserve_reason = ""
             continue
 
@@ -1192,10 +1235,13 @@ def filter_fractals_by_occupied_bars(candidates: List[Pivot], merged: Optional[L
             previous_same = previous_same_kind(p.kind)
             if previous_same is None:
                 if p.preserve_reason:
+                    add_process(p, f"{reason_prefix}；因反向缺口保护保留")
                     pivots.append(p)
                 else:
+                    filter_note = f"{reason_prefix}，且无上一个同类分型可比较"
                     p.valid = False
-                    p.filter_reason = f"{reason_prefix}，且无上一个同类分型可比较"
+                    p.filter_reason = filter_note
+                    add_process(p, filter_note)
                     p.preserve_reason = ""
                 return True
             better_top = p.kind == "top" and p.price > previous_same.price
@@ -1203,29 +1249,45 @@ def filter_fractals_by_occupied_bars(candidates: List[Pivot], merged: Optional[L
             if better_top or better_bottom:
                 replace_with_overlap_extreme(p, last)
             else:
-                p.valid = False
-                p.filter_reason = (
+                filter_note = (
                     f"{reason_prefix}；当前顶分型未高于上一个顶分型{fmt_date(previous_same.date)}，舍弃当前顶分型"
                     if p.kind == "top"
                     else f"{reason_prefix}；当前底分型未低于上一个底分型{fmt_date(previous_same.date)}，舍弃当前底分型"
                 )
+                p.valid = False
+                p.filter_reason = filter_note
+                add_process(p, filter_note)
+                p.preserve_reason = ""
+            return True
+
+        def filter_invalid_spacing(reason_prefix: str) -> bool:
+            if p.preserve_reason:
+                add_process(p, f"{reason_prefix}；因反向缺口保护保留")
+                pivots.append(p)
+            else:
+                filter_note = f"{reason_prefix}；不满足分型间隔要求，舍弃当前分型"
+                p.valid = False
+                p.filter_reason = filter_note
+                add_process(p, filter_note)
                 p.preserve_reason = ""
             return True
 
         last_end = last.index + 1
         curr_start = p.index - 1
         if curr_start < last_end + 2:
-            handle_overlap(f"分型占用区间与前一有效分型{fmt_date(last.date)}重叠，或中间不足1根独立K线")
+            filter_invalid_spacing(f"分型占用区间与前一有效分型{fmt_date(last.date)}重叠，或中间不足1根独立K线")
             continue
 
         if last.kind == "bottom" and p.kind == "top":
             if p.low > last.high:
+                add_process(p, f"顶分型最低{p.low:.2f}高于前一底分型{fmt_date(last.date)}最高{last.high:.2f}，区间不重叠，保留")
                 pivots.append(p)
             else:
                 handle_overlap(f"顶分型最低{p.low:.2f}未高于前一底分型{fmt_date(last.date)}最高{last.high:.2f}，区间重叠")
             continue
         if last.kind == "top" and p.kind == "bottom":
             if p.high < last.low:
+                add_process(p, f"底分型最高{p.high:.2f}低于前一顶分型{fmt_date(last.date)}最低{last.low:.2f}，区间不重叠，保留")
                 pivots.append(p)
             else:
                 handle_overlap(f"底分型最高{p.high:.2f}未低于前一顶分型{fmt_date(last.date)}最低{last.low:.2f}，区间重叠")
@@ -2008,6 +2070,43 @@ function focusChartDate(value, row) {{
   wrap.scrollIntoView({{ block: 'nearest', inline: 'nearest', behavior: 'smooth' }});
 }}
 
+function findNearestFractalRow(panel, key) {{
+  var exact = panel.querySelector('tr[data-fractal-row][data-chart-date="' + key + '"]');
+  if (exact) return exact;
+  var target = Number(normalizeKey(key));
+  var best = null;
+  var bestDelta = Infinity;
+  panel.querySelectorAll('tr[data-fractal-row][data-chart-date]').forEach(function(row) {{
+    var value = Number(normalizeKey(row.getAttribute('data-chart-date')));
+    if (!isFinite(value)) return;
+    var delta = Math.abs(value - target);
+    if (delta < bestDelta) {{
+      bestDelta = delta;
+      best = row;
+    }}
+  }});
+  return best;
+}}
+
+function focusFractalTimePicker(picker) {{
+  if (!picker) return false;
+  var value = picker.value;
+  if (!value) return false;
+  var key = picker.getAttribute('data-picker-level') === 'daily'
+    ? value.replace(/-/g, '')
+    : value.replace('T', '').replace(/[-:]/g, '');
+  var panel = wrap.closest('.timeframe-panel') || document;
+  var details = picker.closest('details');
+  if (details) details.open = true;
+  var fractalRow = findNearestFractalRow(panel, key);
+  focusChartDate(key, fractalRow);
+  if (fractalRow) {{
+    markSelectedRow(fractalRow);
+    scrollRowWithinTable(fractalRow);
+  }}
+  return true;
+}}
+
 function findFractal(rowNumber) {{
   rowNumber = Number(rowNumber);
   for (var i = 0; i < chartData.fractals.length; i++) {{
@@ -2136,6 +2235,19 @@ window.addEventListener('mouseup', function() {{
 wrap.addEventListener('mouseleave', function() {{ tip.style.display = 'none'; }});
 
 document.addEventListener('click', function(e) {{
+  var timePicker = e.target.closest('[data-fractal-time-picker]');
+  if (timePicker && wrap.closest('.timeframe-panel.active')) {{
+    e.stopPropagation();
+    return;
+  }}
+  var timePickerButton = e.target.closest('[data-fractal-time-submit]');
+  if (timePickerButton && wrap.closest('.timeframe-panel.active')) {{
+    e.preventDefault();
+    e.stopPropagation();
+    var picker = timePickerButton.closest('.summary-tools').querySelector('[data-fractal-time-picker]');
+    focusFractalTimePicker(picker);
+    return;
+  }}
   var reasonDate = e.target.closest('[data-fractal-date]');
   if (reasonDate && wrap.closest('.timeframe-panel.active')) {{
     e.preventDefault();
@@ -2299,15 +2411,34 @@ def build_report_panel(stock_code, frame):
             escaped,
         )
 
+    def render_notes(notes) -> str:
+        clean = [str(x) for x in (notes or []) if str(x).strip()]
+        if not clean:
+            return ""
+        items = "".join(f"<li>{link_reason_dates(x)}</li>" for x in clean)
+        return f"<ol class=\"note-list\">{items}</ol>"
+
     f_lines = []
+    picker_type = "date" if key == "daily" else "datetime-local"
+    picker_level = "daily" if key == "daily" else "intraday"
+    picker_step = "86400" if key == "daily" else "60"
     for i,pv in enumerate(fractal_records,1):
         valid = getattr(pv, "valid", True)
         row_classes = ["chart-linked-row"]
         if not valid:
             row_classes.append("filtered-fractal-row")
         status = "有效" if valid else "已过滤"
-        reason_text = getattr(pv, "filter_reason", "") or getattr(pv, "replaced_reason", "") or getattr(pv, "preserve_reason", "") or ""
-        reason = link_reason_dates(reason_text)
+        process_notes = list(getattr(pv, "process_notes", []) or [])
+        fallback_note = (
+            getattr(pv, "filter_reason", "")
+            or getattr(pv, "replaced_reason", "")
+            or getattr(pv, "preserve_reason", "")
+            or getattr(pv, "note_reason", "")
+            or ""
+        )
+        if fallback_note and fallback_note not in process_notes:
+            process_notes.append(fallback_note)
+        reason = render_notes(process_notes)
         f_lines.append(
             f"<tr class=\"{' '.join(row_classes)}\" data-chart-date=\"{pv.date}\" data-fractal-row=\"{i}\"><td>{i}</td><td>{fmt_date(pv.date)}</td><td>{'顶分型' if pv.kind=='top' else '底分型'}</td>"
             f"<td>{price_with_date(pv.price, pv.date)}</td>"
@@ -2369,20 +2500,20 @@ def build_report_panel(stock_code, frame):
             row_classes.append("filtered-pen-row")
         status = "有效" if is_effective else "已过滤"
         if is_effective:
-            reason = ""
+            reason = render_notes(["成笔: 顶底交替且间隔通过，保留为有效笔"])
         elif step.accepted:
             replacement = effective_pen_by_start_kind.get((step.prev_idx, step.curr_kind))
             if replacement and replacement.index != step.curr_idx:
                 replacement_date = fmt_date(replacement.date)
                 comparison = "更高" if step.curr_kind == "top" else "更低"
-                reason = html.escape(
+                reason = render_notes([
                     f"跳过(被同类极值替换): 后续{'顶分型' if step.curr_kind=='top' else '底分型'}"
                     f"{replacement_date} {replacement.price:.2f} {comparison}，最终保留该分型"
-                )
+                ])
             else:
-                reason = html.escape("跳过(后续构造调整): 该候选笔未保留在最终笔序列")
+                reason = render_notes(["跳过(后续构造调整): 该候选笔未保留在最终笔序列"])
         else:
-            reason = html.escape(step.check)
+            reason = render_notes([step.check])
         data_pen_index = f' data-pen-index="{pen_index}"' if is_effective else ""
         prev_date = fmt_date(merged_bars[step.prev_idx].date) if 0 <= step.prev_idx < len(merged_bars) else str(step.prev_idx)
         curr_date = fmt_date(merged_bars[step.curr_idx].date) if 0 <= step.curr_idx < len(merged_bars) else str(step.curr_idx)
@@ -2424,10 +2555,10 @@ def build_report_panel(stock_code, frame):
 </table></div>
 </details>
 <details>
-<summary>原始分型列表（候选{len(fractal_records)}个，有效{len(raw_fractals)}个）</summary>
+<summary><span>原始分型列表（形态{len(fractal_records)}个，有效{len(raw_fractals)}个）</span><span class="summary-tools"><label class="time-jump-label">定位时间<input type="{picker_type}" step="{picker_step}" data-picker-level="{picker_level}" data-fractal-time-picker></label><button type="button" class="time-jump-button" data-fractal-time-submit>确定</button></span></summary>
 <div class="table-wrap fractal-table-wrap">
 <table>
-<thead><tr><th>#</th><th>日期</th><th>类型</th><th>分型价格</th><th>最高</th><th>最低</th><th>状态</th><th>过滤原因</th></tr></thead>
+<thead><tr><th>#</th><th>日期</th><th>类型</th><th>分型价格</th><th>最高</th><th>最低</th><th>状态</th><th>备注</th></tr></thead>
 <tbody>{frows if frows else '<tr><td colspan="8">未识别到足够分型</td></tr>'}</tbody>
 </table></div>
 </details>
@@ -2436,7 +2567,7 @@ def build_report_panel(stock_code, frame):
 <summary>笔列表（候选{len(pen_records)}笔，有效{max(0, len(pens)-1)}笔）</summary>
 <div class="table-wrap pen-table-wrap">
 <table>
-<thead><tr><th>#</th><th>方向</th><th>起点日期</th><th>起点类型</th><th>起点价格</th><th>终点日期</th><th>终点类型</th><th>终点价格</th><th>K线间隔</th><th>价差</th><th>状态</th><th>过滤原因</th></tr></thead>
+<thead><tr><th>#</th><th>方向</th><th>起点日期</th><th>起点类型</th><th>起点价格</th><th>终点日期</th><th>终点类型</th><th>终点价格</th><th>K线间隔</th><th>价差</th><th>状态</th><th>备注</th></tr></thead>
 <tbody>{penrows if penrows else '<tr><td colspan="12">未构造出足够的笔</td></tr>'}</tbody>
 </table></div>
 </details>'''
@@ -2500,6 +2631,13 @@ summary {{ display:flex; align-items:center; justify-content:space-between; gap:
 summary::-webkit-details-marker {{ display:none; }}
 summary::after {{ content:"收起"; color:var(--muted); font-size:13px; font-weight:600; }}
 details:not([open]) summary::after {{ content:"展开"; }}
+.summary-tools {{ display:flex; align-items:center; gap:10px; margin-left:auto; }}
+.time-jump-label {{ display:inline-flex; align-items:center; gap:8px; color:var(--muted); font-size:13px; font-weight:600; white-space:nowrap; cursor:default; }}
+.time-jump-label input {{ height:32px; min-width:178px; border:1px solid var(--line); border-radius:6px; padding:4px 8px; color:var(--ink); background:#fff; font:inherit; font-size:13px; }}
+.time-jump-label input[type="date"] {{ min-width:138px; }}
+.time-jump-label input:focus {{ outline:2px solid rgba(31,111,139,.16); border-color:var(--accent); }}
+.time-jump-button {{ height:32px; border:1px solid var(--accent); border-radius:6px; background:var(--accent); color:#fff; padding:0 12px; font-size:13px; font-weight:700; cursor:pointer; }}
+.time-jump-button:hover {{ background:#175cd3; border-color:#175cd3; }}
 details .table-wrap {{ padding:0 20px 18px; }}
 .table-wrap {{ overflow-x:auto; -webkit-overflow-scrolling:touch; max-width:100%; }}
 .merge-table-wrap {{ max-height:546px; overflow:auto; }}
@@ -2518,6 +2656,9 @@ td.process-cell {{ min-width:260px; white-space:normal; overflow-wrap:anywhere; 
 td.reason-cell {{ min-width:280px; white-space:normal; overflow-wrap:anywhere; }}
 .reason-date-link {{ border:0; padding:0; margin:0; background:transparent; color:var(--accent); font:inherit; text-decoration:underline; cursor:pointer; }}
 .reason-date-link:hover {{ color:#175cd3; }}
+.note-list {{ margin:0; padding-left:18px; min-width:300px; white-space:normal; overflow-wrap:anywhere; }}
+.note-list li {{ margin:0 0 4px; line-height:1.45; }}
+.note-list li:last-child {{ margin-bottom:0; }}
 td .cell-list {{ list-style:none; margin:0; padding:0; min-width:0; white-space:normal; }}
 td .cell-list li {{ margin:0 0 3px; padding:0; line-height:1.45; }}
 td .cell-list li:last-child {{ margin-bottom:0; }}
@@ -2551,7 +2692,11 @@ ul {{ margin:0; padding-left:18px; }}
   header {{ padding:22px 16px; }}
   main {{ padding:14px; }}
   section {{ padding:14px; }}
-  summary {{ padding:14px; font-size:18px; }}
+  summary {{ padding:14px; font-size:18px; flex-wrap:wrap; align-items:flex-start; }}
+  .summary-tools {{ width:100%; margin-left:0; }}
+  .time-jump-label {{ width:100%; justify-content:space-between; }}
+  .time-jump-label input {{ flex:1; min-width:0; }}
+  .time-jump-button {{ width:100%; }}
   details .table-wrap {{ padding:0 14px 14px; }}
   h1 {{ font-size:24px; }}
   h2 {{ font-size:18px; }}
