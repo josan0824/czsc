@@ -1090,6 +1090,11 @@ def filter_fractals_by_occupied_bars(candidates: List[Pivot], merged: Optional[L
                     break
         return items
 
+    def more_extreme_pivot(a: Pivot, b: Pivot) -> Pivot:
+        if a.kind == "bottom":
+            return a if a.price < b.price else b
+        return a if a.price > b.price else b
+
     def weaker_pivot(a: Pivot, b: Pivot) -> Pivot:
         if a.kind == "bottom":
             return a if a.low > b.low else b
@@ -1097,24 +1102,58 @@ def filter_fractals_by_occupied_bars(candidates: List[Pivot], merged: Optional[L
 
     def remove_pivot(item: Pivot):
         if item in pivots:
-            pivots.remove(item)
+            idx = pivots.index(item)
+            pivots.pop(idx)
+            return idx
+        return None
 
-    def replace_with_overlap_extreme(p: Pivot, previous_same: Pivot, last: Pivot, reason: str):
+    def mark_same_kind_merged(discarded: Pivot, kept: Pivot):
+        discarded.valid = False
+        discarded.filter_reason = ""
+        discarded.preserve_reason = ""
+        discarded.replaced_reason = (
+            f"相邻顶分型{fmt_date(kept.date)}更高，按同类极值归并舍弃本顶分型"
+            if discarded.kind == "top"
+            else f"相邻底分型{fmt_date(kept.date)}更低，按同类极值归并舍弃本底分型"
+        )
+
+    def normalize_same_kind_neighbors(anchor: Optional[Pivot]) -> Optional[Pivot]:
+        """向左归并相邻同类分型，顶取高、底取低。"""
+        if anchor is None:
+            return None
+        while anchor in pivots:
+            idx = pivots.index(anchor)
+            if idx <= 0:
+                break
+            left = pivots[idx - 1]
+            if left.kind != anchor.kind:
+                break
+            kept = more_extreme_pivot(left, anchor)
+            discarded = anchor if kept is left else left
+            mark_same_kind_merged(discarded, kept)
+            remove_pivot(discarded)
+            anchor = kept
+        return anchor
+
+    def replace_with_overlap_extreme(p: Pivot, last: Pivot):
         opposite_kind = last.kind
         opposite_candidates = previous_two_of_kind(opposite_kind)
         opposite_to_remove = weaker_pivot(opposite_candidates[0], opposite_candidates[1]) if len(opposite_candidates) >= 2 else last
-        previous_same.valid = False
-        previous_same.filter_reason = reason
-        previous_same.preserve_reason = ""
-        previous_same.replaced_reason = f"被{fmt_date(p.date)}同类更极端分型替换"
         opposite_to_remove.valid = False
-        opposite_to_remove.filter_reason = reason
+        opposite_to_remove.filter_reason = ""
         opposite_to_remove.preserve_reason = ""
-        opposite_to_remove.replaced_reason = f"因{fmt_date(p.date)}重合替换，舍弃两个相邻{opposite_kind}分型中较弱者"
+        opposite_to_remove.replaced_reason = (
+            f"后续顶分型{fmt_date(p.date)}触发重合替换；本底分型是两个相邻底分型中低点较高者，按较弱反向分型舍弃"
+            if opposite_kind == "bottom"
+            else f"后续底分型{fmt_date(p.date)}触发重合替换；本顶分型是两个相邻顶分型中高点较低者，按较弱反向分型舍弃"
+        )
         p.preserve_reason = ""
-        remove_pivot(previous_same)
-        remove_pivot(opposite_to_remove)
+        removed_idx = remove_pivot(opposite_to_remove)
+        if removed_idx is not None:
+            anchor = pivots[removed_idx] if removed_idx < len(pivots) else (pivots[-1] if pivots else None)
+            normalize_same_kind_neighbors(anchor)
         pivots.append(p)
+        normalize_same_kind_neighbors(p)
 
     for p in candidates:
         p.valid = True
@@ -1162,15 +1201,7 @@ def filter_fractals_by_occupied_bars(candidates: List[Pivot], merged: Optional[L
             better_top = p.kind == "top" and p.price > previous_same.price
             better_bottom = p.kind == "bottom" and p.price < previous_same.price
             if better_top or better_bottom:
-                opposite_kind_name = "底分型" if p.kind == "top" else "顶分型"
-                reason = (
-                    f"{reason_prefix}；当前顶分型{fmt_date(p.date)}更高于上一个顶分型{fmt_date(previous_same.date)}，"
-                    f"舍弃上一个顶分型，并在最近两个有效{opposite_kind_name}中舍弃低点更高者"
-                    if p.kind == "top"
-                    else f"{reason_prefix}；当前底分型{fmt_date(p.date)}更低于上一个底分型{fmt_date(previous_same.date)}，"
-                    f"舍弃上一个底分型，并在最近两个有效{opposite_kind_name}中舍弃高点更低者"
-                )
-                replace_with_overlap_extreme(p, previous_same, last, reason)
+                replace_with_overlap_extreme(p, last)
             else:
                 p.valid = False
                 p.filter_reason = (
@@ -2090,6 +2121,20 @@ window.addEventListener('mouseup', function() {{
 wrap.addEventListener('mouseleave', function() {{ tip.style.display = 'none'; }});
 
 document.addEventListener('click', function(e) {{
+  var reasonDate = e.target.closest('[data-fractal-date]');
+  if (reasonDate && wrap.closest('.timeframe-panel.active')) {{
+    e.preventDefault();
+    e.stopPropagation();
+    var date = normalizeKey(reasonDate.getAttribute('data-fractal-date'));
+    var panel = wrap.closest('.timeframe-panel') || document;
+    var targetRow = panel.querySelector('tr[data-fractal-row][data-chart-date="' + date + '"]');
+    if (targetRow) {{
+      focusFractal(targetRow.getAttribute('data-fractal-row'), reasonDate);
+    }} else {{
+      focusChartDate(date, null);
+    }}
+    return;
+  }}
   var marker = e.target.closest('.chart-fractal-marker');
   if (marker && wrap.closest('.timeframe-panel.active')) {{
     e.preventDefault();
@@ -2222,9 +2267,28 @@ def build_report_panel(stock_code, frame):
     pens = frame.get("pens") or []
     pen_details = frame.get("details") or []
     fractal_records = frame.get("fractal_records") or raw_fractals
+    is_intraday = key in ("1m", "5m", "30m")
+
+    def display_date(date):
+        full = fmt_date(date)
+        if is_intraday and " " in full:
+            return full.split(" ", 1)[1]
+        return full
 
     def price_with_date(value, date):
-        return f"{safe(value)}（{fmt_date(date)}）" if date else safe(value)
+        return f"{safe(value)}（{display_date(date)}）" if date else safe(value)
+
+    def link_reason_dates(text: str) -> str:
+        escaped = html.escape(text)
+        pattern = re.compile(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2})")
+        return pattern.sub(
+            lambda m: (
+                f'<button type="button" class="reason-date-link" '
+                f'data-fractal-date="{m.group(1).replace("-", "").replace(":", "").replace(" ", "")}">'
+                f'{m.group(1)}</button>'
+            ),
+            escaped,
+        )
 
     f_lines = []
     for i,pv in enumerate(fractal_records,1):
@@ -2234,7 +2298,7 @@ def build_report_panel(stock_code, frame):
             row_classes.append("filtered-fractal-row")
         status = "有效" if valid else "已过滤"
         reason_text = getattr(pv, "filter_reason", "") or getattr(pv, "replaced_reason", "") or getattr(pv, "preserve_reason", "") or ""
-        reason = html.escape(reason_text)
+        reason = link_reason_dates(reason_text)
         f_lines.append(
             f"<tr class=\"{' '.join(row_classes)}\" data-chart-date=\"{pv.date}\" data-fractal-row=\"{i}\"><td>{i}</td><td>{fmt_date(pv.date)}</td><td>{'顶分型' if pv.kind=='top' else '底分型'}</td>"
             f"<td>{price_with_date(pv.price, pv.date)}</td>"
@@ -2443,6 +2507,8 @@ tr.selected-row td {{ background:#e8f6fb !important; color:var(--ink); }}
 tr.selected-row td:first-child {{ box-shadow:inset 3px 0 0 var(--accent); }}
 td.process-cell {{ min-width:260px; white-space:normal; overflow-wrap:anywhere; }}
 td.reason-cell {{ min-width:280px; white-space:normal; overflow-wrap:anywhere; }}
+.reason-date-link {{ border:0; padding:0; margin:0; background:transparent; color:var(--accent); font:inherit; text-decoration:underline; cursor:pointer; }}
+.reason-date-link:hover {{ color:#175cd3; }}
 td .cell-list {{ list-style:none; margin:0; padding:0; min-width:0; white-space:normal; }}
 td .cell-list li {{ margin:0 0 3px; padding:0; line-height:1.45; }}
 td .cell-list li:last-child {{ margin-bottom:0; }}
