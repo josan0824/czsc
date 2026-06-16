@@ -2016,6 +2016,21 @@ function findFractal(rowNumber) {{
   return null;
 }}
 
+function findFractalByDate(value) {{
+  var date = normalizeKey(value);
+  for (var i = 0; i < chartData.fractals.length; i++) {{
+    if (normalizeKey(chartData.fractals[i].date) === date) return chartData.fractals[i];
+  }}
+  return null;
+}}
+
+function highlightFractalReferenceByDate(value) {{
+  var fractal = findFractalByDate(value);
+  if (!fractal) return false;
+  showFractalHighlight(fractal);
+  return true;
+}}
+
 function scrollRowWithinTable(row) {{
   if (!row) return;
   var tableWrap = row.closest('.table-wrap');
@@ -2126,13 +2141,7 @@ document.addEventListener('click', function(e) {{
     e.preventDefault();
     e.stopPropagation();
     var date = normalizeKey(reasonDate.getAttribute('data-fractal-date'));
-    var panel = wrap.closest('.timeframe-panel') || document;
-    var targetRow = panel.querySelector('tr[data-fractal-row][data-chart-date="' + date + '"]');
-    if (targetRow) {{
-      focusFractal(targetRow.getAttribute('data-fractal-row'), reasonDate);
-    }} else {{
-      focusChartDate(date, null);
-    }}
+    highlightFractalReferenceByDate(date);
     return;
   }}
   var marker = e.target.closest('.chart-fractal-marker');
