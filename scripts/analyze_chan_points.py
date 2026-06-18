@@ -2756,8 +2756,11 @@ def make_html(stock_code, source_label, timeframes, default_key="daily"):
       {symbol_options}
     </select>
   </label>
+  <label>代码/名称
+    <input type="text" name="query" data-symbol-query maxlength="40" placeholder="输入代码或名称，如 600519.SH / 贵州茅台 / 沪深300">
+  </label>
   <button type="submit" data-symbol-submit>生成</button>
-  <span class="symbol-status" data-symbol-status>选择后重新生成 1分钟报告</span>
+  <span class="symbol-status" data-symbol-status>选择快捷标的，或输入代码/名称后生成 1分钟报告</span>
 </form>'''
 
     return f'''<!doctype html>
@@ -2776,8 +2779,10 @@ h2 {{ margin:0 0 14px; font-size:20px; }}
 .sub {{ color:var(--muted); }}
 .symbol-switch {{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:0 0 14px; }}
 .symbol-switch label {{ display:inline-flex; align-items:center; gap:8px; color:var(--muted); font-size:13px; font-weight:700; }}
-.symbol-switch select {{ height:34px; min-width:156px; border:1px solid var(--line); border-radius:6px; padding:4px 32px 4px 10px; background:#fff; color:var(--ink); font:inherit; font-size:14px; }}
-.symbol-switch select:focus {{ outline:2px solid rgba(31,111,139,.16); border-color:var(--accent); }}
+.symbol-switch select,.symbol-switch input {{ height:34px; border:1px solid var(--line); border-radius:6px; padding:4px 10px; background:#fff; color:var(--ink); font:inherit; font-size:14px; }}
+.symbol-switch select {{ min-width:156px; padding-right:32px; }}
+.symbol-switch input {{ min-width:300px; }}
+.symbol-switch select:focus,.symbol-switch input:focus {{ outline:2px solid rgba(31,111,139,.16); border-color:var(--accent); }}
 .symbol-switch button {{ height:34px; border:1px solid var(--accent); border-radius:6px; background:var(--accent); color:#fff; padding:0 14px; font-size:14px; font-weight:700; cursor:pointer; }}
 .symbol-switch button:hover {{ background:#175cd3; border-color:#175cd3; }}
 .symbol-switch button:disabled {{ cursor:not-allowed; opacity:.65; }}
@@ -2859,7 +2864,7 @@ ul {{ margin:0; padding-left:18px; }}
   section {{ padding:14px; }}
   .symbol-switch {{ align-items:stretch; }}
   .symbol-switch label {{ width:100%; justify-content:space-between; }}
-  .symbol-switch select {{ flex:1; min-width:0; }}
+  .symbol-switch select,.symbol-switch input {{ flex:1; min-width:0; }}
   .symbol-switch button {{ width:100%; }}
   .symbol-status {{ width:100%; }}
   summary {{ padding:14px; font-size:18px; flex-wrap:wrap; align-items:flex-start; }}
@@ -2894,6 +2899,7 @@ ul {{ margin:0; padding-left:18px; }}
   if (symbolForm) {{
     var status = symbolForm.querySelector('[data-symbol-status]');
     var submit = symbolForm.querySelector('[data-symbol-submit]');
+    var query = symbolForm.querySelector('[data-symbol-query]');
     function setStatus(text, isError) {{
       if (!status) return;
       status.textContent = text;
@@ -2907,6 +2913,9 @@ ul {{ margin:0; padding-left:18px; }}
         ev.preventDefault();
         setStatus('请先启动本地服务，再通过 http://127.0.0.1:8765/ 访问', true);
         return;
+      }}
+      if (query) {{
+        query.value = query.value.trim();
       }}
       setStatus('正在生成，请稍候...', false);
       if (submit) submit.disabled = true;

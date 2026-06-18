@@ -198,6 +198,21 @@ whoami
 lighthouse
 ```
 
+也可能输出：
+
+```text
+ubuntu
+```
+
+后续所有涉及用户名的命令，需要使用你实际看到的用户。为了方便复制，先保存当前用户：
+
+```bash
+export DEPLOY_USER="$(whoami)"
+echo "$DEPLOY_USER"
+```
+
+如果你在腾讯云 Web 终端里想再开一个终端窗口，可以回到实例详情页，再点一次 **登录 / 远程登录 / OrcaTerm**，浏览器会打开一个新的终端标签页。这相当于第二个 SSH 窗口。
+
 ### 方式 B：本地 SSH 登录
 
 本地终端执行：
@@ -226,7 +241,13 @@ yes
 ssh root@你的公网IP
 ```
 
-本文档后续命令默认使用 `lighthouse` 用户，并通过 `sudo` 执行管理员操作。
+如果控制台里 `whoami` 显示的是 `ubuntu`，本地 SSH 就用：
+
+```bash
+ssh ubuntu@你的公网IP
+```
+
+本文档后续命令默认使用普通用户，并通过 `sudo` 执行管理员操作。用户名统一使用 `$DEPLOY_USER` 表示。
 
 ---
 
@@ -284,7 +305,7 @@ https://github.com/josan0824/czsc.git
 
 ```bash
 sudo mkdir -p /opt
-sudo chown -R lighthouse:lighthouse /opt
+sudo chown -R "$DEPLOY_USER:$DEPLOY_USER" /opt
 ```
 
 拉取代码：
@@ -308,6 +329,33 @@ cd /opt/czsc
 git pull
 ```
 
+如果 `git pull` 报错：
+
+```text
+GnuTLS recv error (-110): The TLS connection was non-properly terminated
+```
+
+这是服务器到 GitHub 的 HTTPS 连接被中途断开，不是代码问题。先执行：
+
+```bash
+git config --global http.version HTTP/1.1
+git config --global http.postBuffer 524288000
+git pull
+```
+
+如果仍失败，可以用 GitHub 压缩包替代 `git pull`：
+
+```bash
+cd /opt
+mv czsc "czsc_bak_$(date +%Y%m%d_%H%M%S)"
+curl -L https://github.com/josan0824/czsc/archive/refs/heads/main.tar.gz -o /tmp/czsc.tar.gz
+mkdir -p /opt/czsc
+tar -xzf /tmp/czsc.tar.gz -C /opt/czsc --strip-components=1
+cd /opt/czsc
+```
+
+然后继续后面的 Python 环境步骤。
+
 ---
 
 ## 07. Python 环境
@@ -330,16 +378,43 @@ python3 -m venv .venv
 source .venv/bin/activate
 ```
 
+这条命令成功时通常没有任何输出，只是命令行前面多出：
+
+```text
+(.venv)
+```
+
+确认虚拟环境是否生效：
+
+```bash
+which python
+which pip
+python -m pip --version
+```
+
+正常应包含：
+
+```text
+/opt/czsc/.venv/bin/python
+/opt/czsc/.venv/bin/pip
+```
+
 升级 pip：
 
 ```bash
-pip install --upgrade pip
+python -m pip install --upgrade pip
 ```
 
 安装依赖：
 
 ```bash
-pip install requests pytdx akshare
+python -m pip install requests pytdx akshare
+```
+
+如果下载慢，可以使用清华源：
+
+```bash
+python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple requests pytdx akshare
 ```
 
 依赖说明：
@@ -351,10 +426,36 @@ pip install requests pytdx akshare
 可选备用依赖：
 
 ```bash
-pip install baostock mootdx
+python -m pip install baostock mootdx
 ```
 
 当前第一版可以不装 `baostock` 和 `mootdx`。脚本里会记录这些备用源不可用，但不影响主流程。
+
+如果安装依赖时出现：
+
+```text
+WARNING: Running pip as the 'root' user
+```
+
+说明依赖可能被安装到了 root 环境，不一定进了当前 `.venv`。请强制使用虚拟环境里的 Python 安装：
+
+```bash
+/opt/czsc/.venv/bin/python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple requests pytdx akshare
+```
+
+验证：
+
+```bash
+/opt/czsc/.venv/bin/python -c "import requests; import pytdx; import akshare; print('ok')"
+```
+
+看到：
+
+```text
+ok
+```
+
+才继续下一步。
 
 ---
 
@@ -364,6 +465,19 @@ pip install baostock mootdx
 
 ```bash
 mkdir -p /opt/czsc/reports
+```
+
+确保报告目录可以被当前部署用户写入：
+
+```bash
+sudo chown -R "$DEPLOY_USER:$DEPLOY_USER" /opt/czsc/reports
+sudo chmod -R u+rwX /opt/czsc/reports
+```
+
+这一步很重要。如果 `reports` 目录之前用 `sudo` 创建过，目录可能属于 `root`，后面服务启动后就会出现：
+
+```text
+PermissionError: [Errno 13] Permission denied: '/opt/czsc/reports/xxx.json'
 ```
 
 手动生成上证指数 1分钟报告：
@@ -438,7 +552,7 @@ HTTP/1.0 303 See Other
 测试生成中证1000：
 
 ```bash
-curl -I "http://127.0.0.1:8765/generate?symbol=SH000852"
+curl -i "http://127.0.0.1:8765/generate?symbol=SH000852" | head -30
 ```
 
 中证1000 正确代码说明：
@@ -447,6 +561,31 @@ curl -I "http://127.0.0.1:8765/generate?symbol=SH000852"
 页面标题应显示：SH000852 (中证1000)
 数据源代码应使用：000852
 不要使用：399852
+```
+
+注意不要用下面命令测试 `/generate`：
+
+```bash
+curl -I "http://127.0.0.1:8765/generate?symbol=SH000852"
+```
+
+`curl -I` 发送的是 `HEAD` 请求，而当前服务主要实现 `GET`。用 `curl -I` 测 `/generate` 可能得到：
+
+```text
+HTTP/1.0 404 File not found
+```
+
+这不代表生成接口坏了。请使用：
+
+```bash
+curl -i "http://127.0.0.1:8765/generate?symbol=SH000852" | head -30
+```
+
+成功时会看到类似：
+
+```text
+HTTP/1.0 303 See Other
+Location: /SH000852_1000__chan_points_...
 ```
 
 验证完成后，回到第一个 SSH 窗口，按：
@@ -480,11 +619,37 @@ WorkingDirectory=/opt/czsc
 ExecStart=/opt/czsc/.venv/bin/python /opt/czsc/scripts/report_server.py --host 127.0.0.1 --port 8765 --reports-dir /opt/czsc/reports
 Restart=always
 RestartSec=5
-User=lighthouse
+User=你的实际用户名
 Environment=PYTHONUNBUFFERED=1
 
 [Install]
 WantedBy=multi-user.target
+```
+
+把 `User=你的实际用户名` 改成 `whoami` 看到的用户。例如：
+
+```ini
+User=ubuntu
+```
+
+或：
+
+```ini
+User=lighthouse
+```
+
+启动服务前，再确认报告目录归属和 `User=` 一致。假设 `User=ubuntu`：
+
+```bash
+sudo chown -R ubuntu:ubuntu /opt/czsc/reports
+sudo chmod -R u+rwX /opt/czsc/reports
+```
+
+如果你用的是 `User=lighthouse`，则改成：
+
+```bash
+sudo chown -R lighthouse:lighthouse /opt/czsc/reports
+sudo chmod -R u+rwX /opt/czsc/reports
 ```
 
 保存：
@@ -591,6 +756,7 @@ server {
 启用站点：
 
 ```bash
+sudo rm -f /etc/nginx/sites-enabled/czsc-report
 sudo ln -s /etc/nginx/sites-available/czsc-report /etc/nginx/sites-enabled/czsc-report
 ```
 
@@ -967,7 +1133,64 @@ python scripts/analyze_chan_points.py \
 如果提示缺依赖：
 
 ```bash
-pip install requests pytdx akshare
+cd /opt/czsc
+source .venv/bin/activate
+python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple requests pytdx akshare
+```
+
+如果安装时出现 `Running pip as the 'root' user`，说明可能装到了 root 环境。改用：
+
+```bash
+/opt/czsc/.venv/bin/python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple requests pytdx akshare
+/opt/czsc/.venv/bin/python -c "import requests; import pytdx; import akshare; print('ok')"
+```
+
+如果页面显示 `生成失败`，日志或页面里出现：
+
+```text
+PermissionError: [Errno 13] Permission denied: '/opt/czsc/reports/SH000001__chan_points_时间戳.json'
+```
+
+说明 Python 服务没有权限写 `/opt/czsc/reports`。先查看 systemd 服务实际使用哪个用户：
+
+```bash
+sudo systemctl cat czsc-report | grep '^User='
+```
+
+如果输出是：
+
+```text
+User=ubuntu
+```
+
+执行：
+
+```bash
+sudo mkdir -p /opt/czsc/reports
+sudo chown -R ubuntu:ubuntu /opt/czsc/reports
+sudo chmod -R u+rwX /opt/czsc/reports
+sudo systemctl restart czsc-report
+```
+
+如果输出是：
+
+```text
+User=lighthouse
+```
+
+执行：
+
+```bash
+sudo mkdir -p /opt/czsc/reports
+sudo chown -R lighthouse:lighthouse /opt/czsc/reports
+sudo chmod -R u+rwX /opt/czsc/reports
+sudo systemctl restart czsc-report
+```
+
+然后重新访问：
+
+```text
+http://你的公网IP/
 ```
 
 如果提示行情接口不可用：
@@ -1002,7 +1225,88 @@ git pull
 sudo systemctl restart czsc-report
 ```
 
-### 17.6 服务器重启后服务没恢复
+### 17.6 `curl -I /generate` 返回 404
+
+如果执行：
+
+```bash
+curl -I "http://127.0.0.1:8765/generate?symbol=SH000852"
+```
+
+看到：
+
+```text
+HTTP/1.0 404 File not found
+```
+
+通常不是服务坏了，而是 `curl -I` 发的是 `HEAD` 请求。当前生成接口按 `GET` 使用。
+
+改用：
+
+```bash
+curl -i "http://127.0.0.1:8765/generate?symbol=SH000852" | head -30
+```
+
+### 17.7 `nginx -t` 报 sites-enabled 文件不存在
+
+如果看到：
+
+```text
+open() "/etc/nginx/sites-enabled/czsc-report" failed (2: No such file or directory)
+```
+
+说明 Nginx 正在加载一个不存在的站点链接，或者软链接指向的源文件不存在。
+
+检查：
+
+```bash
+ls -l /etc/nginx/sites-available/
+ls -l /etc/nginx/sites-enabled/
+```
+
+修复：
+
+```bash
+sudo rm -f /etc/nginx/sites-enabled/czsc-report
+sudo nano /etc/nginx/sites-available/czsc-report
+```
+
+确认已经粘贴第 11 节的完整 Nginx 配置后，重新创建软链接：
+
+```bash
+sudo ln -s /etc/nginx/sites-available/czsc-report /etc/nginx/sites-enabled/czsc-report
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+### 17.8 `git pull` 报 GnuTLS recv error
+
+如果看到：
+
+```text
+GnuTLS recv error (-110): The TLS connection was non-properly terminated
+```
+
+先执行：
+
+```bash
+git config --global http.version HTTP/1.1
+git config --global http.postBuffer 524288000
+git pull
+```
+
+如果仍失败，用压缩包重拉：
+
+```bash
+cd /opt
+mv czsc "czsc_bak_$(date +%Y%m%d_%H%M%S)"
+curl -L https://github.com/josan0824/czsc/archive/refs/heads/main.tar.gz -o /tmp/czsc.tar.gz
+mkdir -p /opt/czsc
+tar -xzf /tmp/czsc.tar.gz -C /opt/czsc --strip-components=1
+cd /opt/czsc
+```
+
+### 17.9 服务器重启后服务没恢复
 
 检查 systemd 是否启用：
 
