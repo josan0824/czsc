@@ -1,0 +1,260 @@
+{
+  "stock": "SH000852 (中证1000)",
+  "source": "通达信1分钟 (000852, 1分钟, 5281根)",
+  "analysis_level": "1分钟级别（含级别切换）",
+  "bar_count": 5281,
+  "pens": 190,
+  "centers": 35,
+  "segments": 25,
+  "diagnosis": {
+    "latest": {
+      "ts_code": "000852",
+      "trade_date": "202606181103",
+      "date": "2026-06-18 11:03",
+      "open": 8745.882,
+      "high": 8745.882,
+      "low": 8745.459,
+      "close": 8745.707
+    },
+    "ma_state": "男上位",
+    "ma": {
+      "ma5": 8740.078800000001,
+      "ma10": 8748.458599999969,
+      "ma20": 8753.915300000002,
+      "ma60": 8764.068283333367
+    },
+    "macd": {
+      "dif": -6.288998394316877,
+      "dea": -4.962764214377171,
+      "hist": -2.6524683598794123
+    },
+    "latest_center": {
+      "start_index": 4138,
+      "end_index": 4251,
+      "start_date": "202606171413",
+      "end_date": "202606181101",
+      "zd": 8745.819,
+      "zg": 8774.945,
+      "gg": 8789.542,
+      "dd": 8637.879,
+      "direction": "down"
+    },
+    "centers": [],
+    "pivots": [],
+    "signals": [
+      {
+        "label": "未确认第一类买点",
+        "score": 2,
+        "confidence": "低",
+        "evidence": [
+          "位于中枢下方或跌破ZD=8745.82"
+        ],
+        "counter_evidence": [
+          "底分型距离较远"
+        ],
+        "levels": {
+          "ZD": 8745.819,
+          "ZG": 8774.945
+        }
+      },
+      {
+        "label": "未确认第一类卖点",
+        "score": 0,
+        "confidence": "低",
+        "evidence": [],
+        "counter_evidence": [
+          "未处于中枢上方",
+          "顶分型距离较远"
+        ],
+        "levels": {
+          "ZD": 8745.819,
+          "ZG": 8774.945
+        }
+      },
+      {
+        "label": "未确认第三类买点",
+        "score": 0,
+        "confidence": "低",
+        "evidence": [],
+        "counter_evidence": [
+          "未识别离开中枢的顶分型"
+        ],
+        "levels": {
+          "ZG": 8774.945,
+          "ZD": 8745.819
+        }
+      },
+      {
+        "label": "未确认第三类卖点",
+        "score": 0,
+        "confidence": "低",
+        "evidence": [],
+        "counter_evidence": [
+          "未识别离开中枢的底分型"
+        ],
+        "levels": {
+          "ZG": 8774.945,
+          "ZD": 8745.819
+        }
+      },
+      {
+        "label": "未确认第二类买点",
+        "score": 0,
+        "confidence": "低",
+        "evidence": [],
+        "counter_evidence": [
+          "未形成底-顶-底结构"
+        ],
+        "levels": {}
+      },
+      {
+        "label": "未确认第二类卖点",
+        "score": 0,
+        "confidence": "低",
+        "evidence": [],
+        "counter_evidence": [
+          "未形成顶-底-顶结构"
+        ],
+        "levels": {}
+      }
+    ],
+    "current": {
+      "label": "当前无确认的一二三类买卖点",
+      "score": 2,
+      "confidence": "低",
+      "evidence": [
+        "位于中枢下方或跌破ZD=8745.82"
+      ],
+      "counter_evidence": [
+        "底分型距离较远"
+      ],
+      "levels": {
+        "ZD": 8745.819,
+        "ZG": 8774.945
+      }
+    }
+  },
+  "html_report": "/Users/josan/.codex/skills/chan-stock-buy-sell-point/reports/SH000852_1000__chan_points_20260618_110210.html",
+  "default_timeframe": "1m",
+  "timeframes": [
+    {
+      "key": "1m",
+      "label": "1分钟",
+      "available": true,
+      "source": "通达信1分钟 (000852, 1分钟, 5281根)",
+      "bar_count": 5281,
+      "merged_count": 4253,
+      "fractal_candidate_count": 1706,
+      "valid_fractal_count": 192,
+      "source_candidates": [
+        {
+          "provider": "新浪分钟K线",
+          "label": "1分钟",
+          "available": false,
+          "bar_count": 0,
+          "code": "",
+          "status": "不可用",
+          "selected": false,
+          "error": "新浪分钟K线无数据 (symbol=sh000852, period=1)"
+        },
+        {
+          "provider": "东方财富分时",
+          "label": "1分钟",
+          "available": true,
+          "bar_count": 1058,
+          "code": "000852",
+          "status": "可用，1058根",
+          "selected": false,
+          "error": ""
+        },
+        {
+          "provider": "腾讯分时",
+          "label": "1分钟",
+          "available": false,
+          "bar_count": 0,
+          "code": "",
+          "status": "不可用",
+          "selected": false,
+          "error": "腾讯分时当前仅用于港股1分钟线"
+        },
+        {
+          "provider": "通达信1分钟",
+          "label": "1分钟",
+          "available": true,
+          "bar_count": 5281,
+          "code": "000852",
+          "status": "可用，5281根",
+          "selected": true,
+          "error": ""
+        },
+        {
+          "provider": "东方财富",
+          "label": "1分钟",
+          "available": true,
+          "bar_count": 93,
+          "code": "000852",
+          "status": "可用，93根",
+          "selected": false,
+          "error": ""
+        },
+        {
+          "provider": "mootdx",
+          "label": "1分钟",
+          "available": false,
+          "bar_count": 0,
+          "code": "",
+          "status": "不可用",
+          "selected": false,
+          "error": "当前环境未安装 mootdx，无法使用通达信分钟线"
+        },
+        {
+          "provider": "baostock",
+          "label": "1分钟",
+          "available": false,
+          "bar_count": 0,
+          "code": "",
+          "status": "不可用",
+          "selected": false,
+          "error": "当前环境未安装 baostock，无法使用 baostock 分钟线"
+        }
+      ],
+      "error": ""
+    },
+    {
+      "key": "5m",
+      "label": "5分钟",
+      "available": false,
+      "source": "",
+      "bar_count": 0,
+      "merged_count": 0,
+      "fractal_candidate_count": 0,
+      "valid_fractal_count": 0,
+      "source_candidates": [],
+      "error": "未请求该级别"
+    },
+    {
+      "key": "30m",
+      "label": "30分钟",
+      "available": false,
+      "source": "",
+      "bar_count": 0,
+      "merged_count": 0,
+      "fractal_candidate_count": 0,
+      "valid_fractal_count": 0,
+      "source_candidates": [],
+      "error": "未请求该级别"
+    },
+    {
+      "key": "daily",
+      "label": "日线",
+      "available": false,
+      "source": "",
+      "bar_count": 0,
+      "merged_count": 0,
+      "fractal_candidate_count": 0,
+      "valid_fractal_count": 0,
+      "source_candidates": [],
+      "error": "未请求该级别"
+    }
+  ]
+}

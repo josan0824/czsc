@@ -1,0 +1,260 @@
+{
+  "stock": "688111.SH (金山办公)",
+  "source": "通达信1分钟 (688111, 1分钟, 5281根)",
+  "analysis_level": "1分钟级别（含级别切换）",
+  "bar_count": 5281,
+  "pens": 151,
+  "centers": 23,
+  "segments": 20,
+  "diagnosis": {
+    "latest": {
+      "ts_code": "688111",
+      "trade_date": "202606181022",
+      "date": "2026-06-18 10:22",
+      "open": 220.93,
+      "high": 220.98,
+      "low": 220.89,
+      "close": 220.9
+    },
+    "ma_state": "男上位",
+    "ma": {
+      "ma5": 220.8999999999998,
+      "ma10": 220.86000000000067,
+      "ma20": 221.43299999999994,
+      "ma60": 218.3538333333334
+    },
+    "macd": {
+      "dif": 0.3770005310479121,
+      "dea": 0.6041692452692655,
+      "hist": -0.45433742844270686
+    },
+    "latest_center": {
+      "start_index": 3189,
+      "end_index": 3695,
+      "start_date": "202606121424",
+      "end_date": "202606181005",
+      "zd": 214.65,
+      "zg": 214.86,
+      "gg": 223.6,
+      "dd": 212.79,
+      "direction": "up"
+    },
+    "centers": [],
+    "pivots": [],
+    "signals": [
+      {
+        "label": "未确认第一类卖点",
+        "score": 2,
+        "confidence": "低",
+        "evidence": [
+          "位于中枢上方或突破ZG=214.86"
+        ],
+        "counter_evidence": [
+          "顶分型距离较远"
+        ],
+        "levels": {
+          "ZD": 214.65,
+          "ZG": 214.86
+        }
+      },
+      {
+        "label": "未确认第一类买点",
+        "score": 0,
+        "confidence": "低",
+        "evidence": [],
+        "counter_evidence": [
+          "未处于中枢下方，中枢[214.65,214.86]",
+          "底分型距离较远"
+        ],
+        "levels": {
+          "ZD": 214.65,
+          "ZG": 214.86
+        }
+      },
+      {
+        "label": "未确认第三类买点",
+        "score": 0,
+        "confidence": "低",
+        "evidence": [],
+        "counter_evidence": [
+          "未识别离开中枢的顶分型"
+        ],
+        "levels": {
+          "ZG": 214.86,
+          "ZD": 214.65
+        }
+      },
+      {
+        "label": "未确认第三类卖点",
+        "score": 0,
+        "confidence": "低",
+        "evidence": [],
+        "counter_evidence": [
+          "未识别离开中枢的底分型"
+        ],
+        "levels": {
+          "ZG": 214.86,
+          "ZD": 214.65
+        }
+      },
+      {
+        "label": "未确认第二类买点",
+        "score": 0,
+        "confidence": "低",
+        "evidence": [],
+        "counter_evidence": [
+          "未形成底-顶-底结构"
+        ],
+        "levels": {}
+      },
+      {
+        "label": "未确认第二类卖点",
+        "score": 0,
+        "confidence": "低",
+        "evidence": [],
+        "counter_evidence": [
+          "未形成顶-底-顶结构"
+        ],
+        "levels": {}
+      }
+    ],
+    "current": {
+      "label": "当前无确认的一二三类买卖点",
+      "score": 2,
+      "confidence": "低",
+      "evidence": [
+        "位于中枢上方或突破ZG=214.86"
+      ],
+      "counter_evidence": [
+        "顶分型距离较远"
+      ],
+      "levels": {
+        "ZD": 214.65,
+        "ZG": 214.86
+      }
+    }
+  },
+  "html_report": "/Users/josan/.codex/skills/chan-stock-buy-sell-point/reports/688111.SH__chan_points_20260618_102142.html",
+  "default_timeframe": "1m",
+  "timeframes": [
+    {
+      "key": "1m",
+      "label": "1分钟",
+      "available": true,
+      "source": "通达信1分钟 (688111, 1分钟, 5281根)",
+      "bar_count": 5281,
+      "merged_count": 3709,
+      "fractal_candidate_count": 1563,
+      "valid_fractal_count": 151,
+      "source_candidates": [
+        {
+          "provider": "新浪分钟K线",
+          "label": "1分钟",
+          "available": false,
+          "bar_count": 0,
+          "code": "",
+          "status": "不可用",
+          "selected": false,
+          "error": "新浪分钟K线无数据 (symbol=sh688111, period=1)"
+        },
+        {
+          "provider": "东方财富分时",
+          "label": "1分钟",
+          "available": false,
+          "bar_count": 0,
+          "code": "",
+          "status": "不可用",
+          "selected": false,
+          "error": "('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
+        },
+        {
+          "provider": "腾讯分时",
+          "label": "1分钟",
+          "available": false,
+          "bar_count": 0,
+          "code": "",
+          "status": "不可用",
+          "selected": false,
+          "error": "腾讯分时当前仅用于港股1分钟线"
+        },
+        {
+          "provider": "通达信1分钟",
+          "label": "1分钟",
+          "available": true,
+          "bar_count": 5281,
+          "code": "688111",
+          "status": "可用，5281根",
+          "selected": true,
+          "error": ""
+        },
+        {
+          "provider": "东方财富",
+          "label": "1分钟",
+          "available": false,
+          "bar_count": 0,
+          "code": "",
+          "status": "不可用",
+          "selected": false,
+          "error": "('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
+        },
+        {
+          "provider": "mootdx",
+          "label": "1分钟",
+          "available": false,
+          "bar_count": 0,
+          "code": "",
+          "status": "不可用",
+          "selected": false,
+          "error": "当前环境未安装 mootdx，无法使用通达信分钟线"
+        },
+        {
+          "provider": "baostock",
+          "label": "1分钟",
+          "available": false,
+          "bar_count": 0,
+          "code": "",
+          "status": "不可用",
+          "selected": false,
+          "error": "当前环境未安装 baostock，无法使用 baostock 分钟线"
+        }
+      ],
+      "error": ""
+    },
+    {
+      "key": "5m",
+      "label": "5分钟",
+      "available": false,
+      "source": "",
+      "bar_count": 0,
+      "merged_count": 0,
+      "fractal_candidate_count": 0,
+      "valid_fractal_count": 0,
+      "source_candidates": [],
+      "error": "未请求该级别"
+    },
+    {
+      "key": "30m",
+      "label": "30分钟",
+      "available": false,
+      "source": "",
+      "bar_count": 0,
+      "merged_count": 0,
+      "fractal_candidate_count": 0,
+      "valid_fractal_count": 0,
+      "source_candidates": [],
+      "error": "未请求该级别"
+    },
+    {
+      "key": "daily",
+      "label": "日线",
+      "available": false,
+      "source": "",
+      "bar_count": 0,
+      "merged_count": 0,
+      "fractal_candidate_count": 0,
+      "valid_fractal_count": 0,
+      "source_candidates": [],
+      "error": "未请求该级别"
+    }
+  ]
+}

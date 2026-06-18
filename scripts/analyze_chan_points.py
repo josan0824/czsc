@@ -78,6 +78,18 @@ class PenStep:
     accepted: bool
 
 
+REPORT_SYMBOLS = [
+    {"symbol": "SH000001", "label": "上证指数"},
+    {"symbol": "000001.SZ", "label": "平安银行"},
+    {"symbol": "000905.SZ", "label": "中证500"},
+    {"symbol": "SH000852", "label": "中证1000"},
+    {"symbol": "SH000300", "label": "沪深300"},
+    {"symbol": "SH000016", "label": "上证50"},
+    {"symbol": "688111.SH", "label": "金山办公"},
+    {"symbol": "002475.SZ", "label": "立讯精密"},
+]
+
+
 # ───────── 参数 ─────────
 
 def parse_args() -> argparse.Namespace:
@@ -141,12 +153,18 @@ def eastsrch(query: str) -> List[dict]:
 
 def is_index_query(query: str) -> bool:
     q = query.strip().upper().replace(" ", "")
-    return any(x in q for x in ("上证", "沪指", "上证指数", "深证成指", "创业板指", "科创50", "指数"))
+    return any(x in q for x in ("上证", "沪指", "上证指数", "深证成指", "创业板指", "科创50", "沪深300", "上证50", "指数"))
 
 def normalize_index_code(code: str, market: str = "") -> str:
     raw = code.strip().upper().replace(" ", "")
     if raw in ("上证", "沪指", "上证指数", "000001", "SH000001", "1.000001"):
         return "SH000001"
+    if raw in ("上证50", "000016", "SH000016", "1.000016"):
+        return "SH000016"
+    if raw in ("沪深300", "000300", "SH000300", "1.000300"):
+        return "SH000300"
+    if raw in ("中证1000", "000852", "SH000852", "1.000852"):
+        return "SH000852"
     if raw in ("深证成指", "399001", "SZ399001", "0.399001"):
         return "SZ399001"
     if raw in ("创业板指", "399006", "SZ399006", "0.399006"):
@@ -184,8 +202,8 @@ def code_to_secid(code: str) -> str:
     raw = code.strip().upper().replace(" ", "")
     if is_index_code(raw):
         return f"{'1' if raw.startswith('SH') else '0'}.{raw[2:]}"
-    if "中证1000" in code or raw == "399852":
-        return "0.399852"
+    if "中证1000" in code or raw in ("000852", "SH000852"):
+        return "1.000852"
     if c.endswith(".HK"): return f"116.{c.replace('.HK','')}"
     m = re.match(r"(\d{6})\.(SH|SZ|BJ)", c)
     if m: return f"{'1' if m.group(2)=='SH' else '0'}.{m.group(1)}"
@@ -196,8 +214,8 @@ def code_to_secid(code: str) -> str:
 def resolve_web_secid(stock_query: str) -> Tuple[str, str, str]:
     query = stock_query.strip()
     raw = query.upper().replace(" ", "")
-    if "中证1000" in query or raw == "399852":
-        return "0.399852", "399852", "中证1000"
+    if "中证1000" in query or raw in ("000852", "SH000852"):
+        return "1.000852", "SH000852", "中证1000"
     if is_index_query(query):
         idx_code = normalize_index_code(query)
         return code_to_secid(idx_code), idx_code, query
@@ -219,10 +237,12 @@ def lookup_stock_name(code: str, query: str = "") -> str:
     known = {
         "000001.SZ": "平安银行",
         "SH000001": "上证指数",
+        "SH000016": "上证50",
+        "SH000300": "沪深300",
         "SZ399001": "深证成指",
         "SZ399006": "创业板指",
         "SH000688": "科创50",
-        "399852": "中证1000",
+        "SH000852": "中证1000",
         "000852": "中证1000",
     }
     if query and not re.fullmatch(r"[A-Za-z0-9.]+", query.strip()):
@@ -750,7 +770,7 @@ def fetch_index_daily_akshare(index_code: str, limit: Optional[int] = None):
     bars = [b for b in bars if b.close > 0]
     if len(bars) < 40:
         raise SystemExit(f"AKShare 指数数据不足40根K线 (实际{len(bars)})")
-    names = {"SH000001": "上证指数", "SZ399001": "深证成指", "SZ399006": "创业板指", "SH000688": "科创50"}
+    names = {"SH000001": "上证指数", "SH000016": "上证50", "SH000300": "沪深300", "SZ399001": "深证成指", "SZ399006": "创业板指", "SH000688": "科创50"}
     return code, names.get(code, ""), bars
 
 def fetch_a_daily_akshare(code: str, limit: Optional[int] = None):
@@ -2724,6 +2744,21 @@ def make_html(stock_code, source_label, timeframes, default_key="daily"):
             )
     panels_html = "\n".join(panels) or '<section><p class="note">没有可展示的K线级别。</p></section>'
     buttons_html = "\n".join(buttons)
+    current_symbol_key = stock_code.split(" ", 1)[0].strip()
+    symbol_options = "\n".join(
+        f'<option value="{html.escape(item["symbol"])}"{" selected" if item["symbol"] == current_symbol_key else ""}>{html.escape(item["label"])}</option>'
+        for item in REPORT_SYMBOLS
+    )
+    symbol_switch_html = f'''
+<form class="symbol-switch" data-symbol-switch action="/generate" method="get">
+  <label>报告标的
+    <select name="symbol" data-symbol-select>
+      {symbol_options}
+    </select>
+  </label>
+  <button type="submit" data-symbol-submit>生成</button>
+  <span class="symbol-status" data-symbol-status>选择后重新生成 1分钟报告</span>
+</form>'''
 
     return f'''<!doctype html>
 <html lang="zh-CN">
@@ -2739,6 +2774,15 @@ main {{ width:min(1200px,100%); margin:0 auto; padding:24px; }}
 h1 {{ margin:0 0 8px; font-size:clamp(24px,4vw,38px); }}
 h2 {{ margin:0 0 14px; font-size:20px; }}
 .sub {{ color:var(--muted); }}
+.symbol-switch {{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:0 0 14px; }}
+.symbol-switch label {{ display:inline-flex; align-items:center; gap:8px; color:var(--muted); font-size:13px; font-weight:700; }}
+.symbol-switch select {{ height:34px; min-width:156px; border:1px solid var(--line); border-radius:6px; padding:4px 32px 4px 10px; background:#fff; color:var(--ink); font:inherit; font-size:14px; }}
+.symbol-switch select:focus {{ outline:2px solid rgba(31,111,139,.16); border-color:var(--accent); }}
+.symbol-switch button {{ height:34px; border:1px solid var(--accent); border-radius:6px; background:var(--accent); color:#fff; padding:0 14px; font-size:14px; font-weight:700; cursor:pointer; }}
+.symbol-switch button:hover {{ background:#175cd3; border-color:#175cd3; }}
+.symbol-switch button:disabled {{ cursor:not-allowed; opacity:.65; }}
+.symbol-status {{ color:var(--muted); font-size:13px; }}
+.symbol-status.error {{ color:#912018; }}
 .tf-switch {{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:14px; }}
 .tf-button {{ border:1px solid #d9dee7; border-radius:6px; background:#fff; color:var(--ink); padding:7px 14px; cursor:pointer; font-size:14px; }}
 .tf-button.active {{ background:var(--accent); border-color:var(--accent); color:#fff; }}
@@ -2813,6 +2857,11 @@ ul {{ margin:0; padding-left:18px; }}
   header {{ padding:22px 16px; }}
   main {{ padding:14px; }}
   section {{ padding:14px; }}
+  .symbol-switch {{ align-items:stretch; }}
+  .symbol-switch label {{ width:100%; justify-content:space-between; }}
+  .symbol-switch select {{ flex:1; min-width:0; }}
+  .symbol-switch button {{ width:100%; }}
+  .symbol-status {{ width:100%; }}
   summary {{ padding:14px; font-size:18px; flex-wrap:wrap; align-items:flex-start; }}
   .summary-tools {{ width:100%; margin-left:0; }}
   .time-jump-label {{ width:100%; justify-content:space-between; }}
@@ -2827,7 +2876,7 @@ ul {{ margin:0; padding-left:18px; }}
 </style>
 </head>
 <body>
-<header><h1>{html.escape(stock_code)} K线包含处理与分型测试</h1>
+<header>{symbol_switch_html}<h1>{html.escape(stock_code)} K线包含处理与分型测试</h1>
 <div class="sub" id="timeframe-meta">数据日期：{html.escape(fmt_date(latest_date))} ｜ {html.escape(gen)} ｜ {html.escape(source_desc)}</div>
 <div class="tf-switch" aria-label="K线级别切换">{buttons_html}</div>
 {warn_html}</header>
@@ -2841,6 +2890,28 @@ ul {{ margin:0; padding-left:18px; }}
 </main>
 <script>
 (function() {{
+  var symbolForm = document.querySelector('[data-symbol-switch]');
+  if (symbolForm) {{
+    var status = symbolForm.querySelector('[data-symbol-status]');
+    var submit = symbolForm.querySelector('[data-symbol-submit]');
+    function setStatus(text, isError) {{
+      if (!status) return;
+      status.textContent = text;
+      status.classList.toggle('error', !!isError);
+    }}
+    if (window.location.protocol === 'file:') {{
+      setStatus('请通过本地服务访问以启用动态生成', true);
+    }}
+    symbolForm.addEventListener('submit', function(ev) {{
+      if (window.location.protocol === 'file:') {{
+        ev.preventDefault();
+        setStatus('请先启动本地服务，再通过 http://127.0.0.1:8765/ 访问', true);
+        return;
+      }}
+      setStatus('正在生成，请稍候...', false);
+      if (submit) submit.disabled = true;
+    }});
+  }}
   var meta = document.getElementById('timeframe-meta');
   document.querySelectorAll('.tf-button[data-timeframe]').forEach(function(btn) {{
     btn.addEventListener('click', function() {{
