@@ -141,12 +141,16 @@ def eastsrch(query: str) -> List[dict]:
 
 def is_index_query(query: str) -> bool:
     q = query.strip().upper().replace(" ", "")
-    return any(x in q for x in ("上证", "沪指", "上证指数", "深证成指", "创业板指", "科创50", "指数"))
+    return any(x in q for x in ("上证", "沪指", "上证指数", "深证成指", "创业板指", "科创50", "沪深300", "上证50", "指数"))
 
 def normalize_index_code(code: str, market: str = "") -> str:
     raw = code.strip().upper().replace(" ", "")
     if raw in ("上证", "沪指", "上证指数", "000001", "SH000001", "1.000001"):
         return "SH000001"
+    if raw in ("上证50", "000016", "SH000016", "1.000016"):
+        return "SH000016"
+    if raw in ("沪深300", "000300", "SH000300", "1.000300"):
+        return "SH000300"
     if raw in ("深证成指", "399001", "SZ399001", "0.399001"):
         return "SZ399001"
     if raw in ("创业板指", "399006", "SZ399006", "0.399006"):
@@ -219,6 +223,8 @@ def lookup_stock_name(code: str, query: str = "") -> str:
     known = {
         "000001.SZ": "平安银行",
         "SH000001": "上证指数",
+        "SH000016": "上证50",
+        "SH000300": "沪深300",
         "SZ399001": "深证成指",
         "SZ399006": "创业板指",
         "SH000688": "科创50",
@@ -750,7 +756,7 @@ def fetch_index_daily_akshare(index_code: str, limit: Optional[int] = None):
     bars = [b for b in bars if b.close > 0]
     if len(bars) < 40:
         raise SystemExit(f"AKShare 指数数据不足40根K线 (实际{len(bars)})")
-    names = {"SH000001": "上证指数", "SZ399001": "深证成指", "SZ399006": "创业板指", "SH000688": "科创50"}
+    names = {"SH000001": "上证指数", "SH000016": "上证50", "SH000300": "沪深300", "SZ399001": "深证成指", "SZ399006": "创业板指", "SH000688": "科创50"}
     return code, names.get(code, ""), bars
 
 def fetch_a_daily_akshare(code: str, limit: Optional[int] = None):
