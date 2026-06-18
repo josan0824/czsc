@@ -151,6 +151,8 @@ def normalize_index_code(code: str, market: str = "") -> str:
         return "SH000016"
     if raw in ("沪深300", "000300", "SH000300", "1.000300"):
         return "SH000300"
+    if raw in ("中证1000", "000852", "SH000852", "1.000852"):
+        return "SH000852"
     if raw in ("深证成指", "399001", "SZ399001", "0.399001"):
         return "SZ399001"
     if raw in ("创业板指", "399006", "SZ399006", "0.399006"):
@@ -188,8 +190,8 @@ def code_to_secid(code: str) -> str:
     raw = code.strip().upper().replace(" ", "")
     if is_index_code(raw):
         return f"{'1' if raw.startswith('SH') else '0'}.{raw[2:]}"
-    if "中证1000" in code or raw == "399852":
-        return "0.399852"
+    if "中证1000" in code or raw in ("000852", "SH000852"):
+        return "1.000852"
     if c.endswith(".HK"): return f"116.{c.replace('.HK','')}"
     m = re.match(r"(\d{6})\.(SH|SZ|BJ)", c)
     if m: return f"{'1' if m.group(2)=='SH' else '0'}.{m.group(1)}"
@@ -200,8 +202,8 @@ def code_to_secid(code: str) -> str:
 def resolve_web_secid(stock_query: str) -> Tuple[str, str, str]:
     query = stock_query.strip()
     raw = query.upper().replace(" ", "")
-    if "中证1000" in query or raw == "399852":
-        return "0.399852", "399852", "中证1000"
+    if "中证1000" in query or raw in ("000852", "SH000852"):
+        return "1.000852", "SH000852", "中证1000"
     if is_index_query(query):
         idx_code = normalize_index_code(query)
         return code_to_secid(idx_code), idx_code, query
@@ -228,7 +230,7 @@ def lookup_stock_name(code: str, query: str = "") -> str:
         "SZ399001": "深证成指",
         "SZ399006": "创业板指",
         "SH000688": "科创50",
-        "399852": "中证1000",
+        "SH000852": "中证1000",
         "000852": "中证1000",
     }
     if query and not re.fullmatch(r"[A-Za-z0-9.]+", query.strip()):
