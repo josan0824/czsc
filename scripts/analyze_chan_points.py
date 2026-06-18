@@ -1150,6 +1150,123 @@ def filter_fractals_by_occupied_bars(candidates: List[Pivot], merged: Optional[L
             anchor = kept
         return anchor
 
+    def has_independent_bar_between(left: Pivot, right: Pivot) -> bool:
+        return (right.index - 1) >= (left.index + 1) + 2
+
+    def maybe_promote_released_top(old_bottom: Pivot, new_bottom: Pivot):
+        """底分型被更低底替换后，检查释放区间里是否有更高顶分型可替换前一顶。"""
+        if len(pivots) < 2:
+            return
+        previous_top = pivots[-2]
+        if previous_top.kind != "top":
+            return
+        released_tops = [
+            candidate
+            for candidate in candidates
+            if candidate.kind == "top"
+            and previous_top.index < candidate.index < new_bottom.index
+            and candidate is not previous_top
+            and candidate is not old_bottom
+            and candidate is not new_bottom
+            and has_independent_bar_between(candidate, new_bottom)
+        ]
+        if not released_tops:
+            add_process(
+                new_bottom,
+                f"更低底分型替换{fmt_date(old_bottom.date)}后释放K线；未发现可与当前底分型保持独立K线间隔的顶分型",
+            )
+            return
+        best_top = max(released_tops, key=lambda item: (item.price, item.high, item.index))
+        if best_top.price <= previous_top.price:
+            add_process(
+                new_bottom,
+                f"更低底分型替换{fmt_date(old_bottom.date)}后释放K线；释放区间最高顶分型{fmt_date(best_top.date)}"
+                f"未高于前一个顶分型{fmt_date(previous_top.date)}，不替换前一顶分型",
+            )
+            return
+        discard_note = (
+            f"释放前一底分型{fmt_date(old_bottom.date)}占用K线后，后续顶分型{fmt_date(best_top.date)}更高，"
+            f"替换本顶分型"
+        )
+        keep_note = (
+            f"前一底分型{fmt_date(old_bottom.date)}被更低底分型{fmt_date(new_bottom.date)}替换后释放K线；"
+            f"本顶分型高于前一个顶分型{fmt_date(previous_top.date)}，替换为新的有效顶分型"
+        )
+        previous_top.valid = False
+        previous_top.filter_reason = ""
+        previous_top.preserve_reason = ""
+        previous_top.replaced_reason = discard_note
+        add_process(previous_top, discard_note)
+        best_top.valid = True
+        best_top.filter_reason = ""
+        best_top.preserve_reason = ""
+        best_top.replaced_reason = ""
+        best_top.note_reason = keep_note
+        add_process(best_top, keep_note)
+        pivots[-2] = best_top
+        add_process(
+            new_bottom,
+            f"更低底分型替换{fmt_date(old_bottom.date)}后释放K线；采用更高顶分型{fmt_date(best_top.date)}"
+            f"替换前一顶分型{fmt_date(previous_top.date)}",
+        )
+
+    def maybe_promote_released_bottom(old_top: Pivot, new_top: Pivot):
+        """顶分型被更高顶替换后，检查释放区间里是否有更低底分型可替换前一底。"""
+        if len(pivots) < 2:
+            return
+        previous_bottom = pivots[-2]
+        if previous_bottom.kind != "bottom":
+            return
+        released_bottoms = [
+            candidate
+            for candidate in candidates
+            if candidate.kind == "bottom"
+            and previous_bottom.index < candidate.index < new_top.index
+            and candidate is not previous_bottom
+            and candidate is not old_top
+            and candidate is not new_top
+            and has_independent_bar_between(candidate, new_top)
+        ]
+        if not released_bottoms:
+            add_process(
+                new_top,
+                f"更高顶分型替换{fmt_date(old_top.date)}后释放K线；未发现可与当前顶分型保持独立K线间隔的底分型",
+            )
+            return
+        best_bottom = min(released_bottoms, key=lambda item: (item.price, item.low, item.index))
+        if best_bottom.price >= previous_bottom.price:
+            add_process(
+                new_top,
+                f"更高顶分型替换{fmt_date(old_top.date)}后释放K线；释放区间最低底分型{fmt_date(best_bottom.date)}"
+                f"未低于前一个底分型{fmt_date(previous_bottom.date)}，不替换前一底分型",
+            )
+            return
+        discard_note = (
+            f"释放前一顶分型{fmt_date(old_top.date)}占用K线后，后续底分型{fmt_date(best_bottom.date)}更低，"
+            f"替换本底分型"
+        )
+        keep_note = (
+            f"前一顶分型{fmt_date(old_top.date)}被更高顶分型{fmt_date(new_top.date)}替换后释放K线；"
+            f"本底分型低于前一个底分型{fmt_date(previous_bottom.date)}，替换为新的有效底分型"
+        )
+        previous_bottom.valid = False
+        previous_bottom.filter_reason = ""
+        previous_bottom.preserve_reason = ""
+        previous_bottom.replaced_reason = discard_note
+        add_process(previous_bottom, discard_note)
+        best_bottom.valid = True
+        best_bottom.filter_reason = ""
+        best_bottom.preserve_reason = ""
+        best_bottom.replaced_reason = ""
+        best_bottom.note_reason = keep_note
+        add_process(best_bottom, keep_note)
+        pivots[-2] = best_bottom
+        add_process(
+            new_top,
+            f"更高顶分型替换{fmt_date(old_top.date)}后释放K线；采用更低底分型{fmt_date(best_bottom.date)}"
+            f"替换前一底分型{fmt_date(previous_bottom.date)}",
+        )
+
     def replace_with_overlap_extreme(p: Pivot, last: Pivot):
         opposite_kind = last.kind
         opposite_candidates = previous_two_of_kind(opposite_kind)
@@ -1218,6 +1335,10 @@ def filter_fractals_by_occupied_bars(candidates: List[Pivot], merged: Optional[L
                 add_process(last, last_note)
                 add_process(p, keep_note)
                 p.preserve_reason = ""
+                if better_top:
+                    maybe_promote_released_bottom(last, p)
+                if better_bottom:
+                    maybe_promote_released_top(last, p)
                 pivots[-1] = p
             else:
                 filter_note = (
