@@ -41,8 +41,8 @@ def page(title, body):
   <title>{html.escape(title)}</title>
   <style>
     body {{ margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:#20242a; background:#f6f7f9; line-height:1.6; }}
-    main {{ width:min(760px,100%); margin:0 auto; padding:36px 20px; }}
-    section {{ background:#fff; border:1px solid #d9dee7; border-radius:8px; padding:22px; }}
+    main {{ width:min(860px,100%); margin:0 auto; padding:36px 20px; }}
+    section {{ background:#fff; border:1px solid #d9dee7; border-radius:8px; padding:22px; margin-bottom:16px; }}
     h1 {{ margin:0 0 12px; font-size:26px; }}
     p {{ margin:8px 0; }}
     a, button {{ color:#1f6f8b; }}
@@ -51,6 +51,9 @@ def page(title, body):
     input {{ min-width:300px; }}
     button {{ height:34px; border:1px solid #1f6f8b; border-radius:6px; background:#1f6f8b; color:#fff; padding:0 14px; font-weight:700; cursor:pointer; }}
     .note {{ color:#667085; font-size:13px; }}
+    .links {{ display:flex; gap:10px; flex-wrap:wrap; margin-top:14px; }}
+    .link-card {{ display:block; flex:1 1 240px; border:1px solid #d9dee7; border-radius:8px; padding:14px; text-decoration:none; color:#20242a; background:#fbfcfe; }}
+    .link-card strong {{ display:block; margin-bottom:4px; color:#1f6f8b; }}
   </style>
 </head>
 <body><main><section>{body}</section></main></body>
@@ -67,6 +70,37 @@ def symbol_form(selected=DEFAULT_SYMBOL, query=""):
   <label>代码/名称 <input type="text" name="query" maxlength="{MAX_QUERY_LEN}" value="{html.escape(query)}" placeholder="输入代码或名称，如 600519.SH / 贵州茅台 / 沪深300"></label>
   <button type="submit">生成</button>
 </form>"""
+
+
+def home_page_body():
+    return f"""<h1>缠论报告服务</h1>
+<p class="note">默认生成 1分钟报告。可以选择快捷标的，也可以输入代码或名称。</p>
+{symbol_form(DEFAULT_SYMBOL)}
+<div class="links">
+  <a class="link-card" href="/help/fractal-pen">
+    <strong>查看分型与笔绘制逻辑说明</strong>
+    <span>整理当前代码中的包含处理、分型候选、过滤规则、笔构造和图形绘制逻辑。</span>
+  </a>
+</div>"""
+
+
+def ensure_logic_help(reports_dir: Path) -> Path:
+    help_path = reports_dir / "help" / "fractal_pen_logic.html"
+    generator = ROOT / "scripts" / "generate_logic_help.py"
+    if generator.exists():
+        proc = subprocess.run(
+            [sys.executable, str(generator)],
+            cwd=str(ROOT),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            detail = proc.stderr.strip() or proc.stdout.strip() or f"退出码 {proc.returncode}"
+            raise RuntimeError(detail)
+    if not help_path.exists():
+        raise RuntimeError(f"帮助文档不存在：{help_path}")
+    return help_path
 
 
 def validate_query(query):
@@ -138,13 +172,29 @@ class ReportHandler(SimpleHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         if parsed.path == "/":
-            self.redirect(f"/generate?symbol={quote(DEFAULT_SYMBOL)}")
+            self.send_html(HTTPStatus.OK, "缠论报告服务", home_page_body())
+            return
+        if parsed.path == "/help/fractal-pen":
+            self.handle_logic_help()
             return
         if parsed.path == "/generate":
             self.handle_generate(parsed)
             return
         self.path = unquote(parsed.path)
         super().do_GET()
+
+    def handle_logic_help(self):
+        try:
+            help_path = ensure_logic_help(self.server.reports_dir)
+            relative = help_path.resolve().relative_to(self.server.reports_dir.resolve())
+        except Exception as exc:
+            self.send_html(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                "帮助文档生成失败",
+                f"<h1>帮助文档生成失败</h1><p>{html.escape(str(exc))}</p>{home_page_body()}",
+            )
+            return
+        self.redirect("/" + quote(relative.as_posix()))
 
     def handle_generate(self, parsed):
         params = parse_qs(parsed.query, keep_blank_values=True)

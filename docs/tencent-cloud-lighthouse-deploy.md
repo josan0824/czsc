@@ -22,11 +22,19 @@ http://你的公网IP/
   ↓ http://公网IP/
 Nginx :80 + Basic Auth
   ↓ 反向代理
-report_server.py :127.0.0.1:8765
+report_server.py :127.0.0.1:8888
   ↓ 调用
 analyze_chan_points.py
   ↓ 输出
 /opt/czsc/reports/*.html
+```
+
+本文档使用 `8888` 作为 Python 内部服务端口。这个端口只在服务器本机访问，不对公网开放。后续如果你改端口，必须同时修改三处：
+
+```text
+systemd ExecStart 里的 --port
+Nginx proxy_pass
+本机 curl 测试命令
 ```
 
 参考腾讯云官方文档：
@@ -149,17 +157,17 @@ TCP 80    HTTP 访问服务
 ICMP      可选，用于 ping
 ```
 
-重要：不要开放 8765。
+重要：不要开放 8888。
 
 ```text
-TCP 8765  不开放
+TCP 8888  不开放
 ```
 
 原因：
 
-- `report_server.py` 是内部 Python 服务，只应该监听 `127.0.0.1:8765`。
+- `report_server.py` 是内部 Python 服务，只应该监听 `127.0.0.1:8888`。
 - 公网访问统一走 Nginx 的 80 端口。
-- 如果开放 8765，别人可能绕过 Nginx Basic Auth 直接触发生成报告。
+- 如果开放 8888，别人可能绕过 Nginx Basic Auth 直接触发生成报告。
 
 如果腾讯云防火墙支持来源 IP 限制，建议把 22 端口限制为你自己的公网 IP。
 
@@ -524,14 +532,14 @@ source .venv/bin/activate
 
 python scripts/report_server.py \
   --host 127.0.0.1 \
-  --port 8765 \
+  --port 8888 \
   --reports-dir /opt/czsc/reports
 ```
 
 看到类似输出：
 
 ```text
-Serving Chan reports at http://127.0.0.1:8765/
+Serving Chan reports at http://127.0.0.1:8888/
 Reports directory: /opt/czsc/reports
 ```
 
@@ -540,7 +548,7 @@ Reports directory: /opt/czsc/reports
 再开一个 SSH 窗口，执行：
 
 ```bash
-curl -I http://127.0.0.1:8765/
+curl -I http://127.0.0.1:8888/
 ```
 
 正常情况会返回：
@@ -552,7 +560,7 @@ HTTP/1.0 303 See Other
 测试生成中证1000：
 
 ```bash
-curl -i "http://127.0.0.1:8765/generate?symbol=SH000852" | head -30
+curl -i "http://127.0.0.1:8888/generate?symbol=SH000852" | head -30
 ```
 
 中证1000 正确代码说明：
@@ -566,7 +574,7 @@ curl -i "http://127.0.0.1:8765/generate?symbol=SH000852" | head -30
 注意不要用下面命令测试 `/generate`：
 
 ```bash
-curl -I "http://127.0.0.1:8765/generate?symbol=SH000852"
+curl -I "http://127.0.0.1:8888/generate?symbol=SH000852"
 ```
 
 `curl -I` 发送的是 `HEAD` 请求，而当前服务主要实现 `GET`。用 `curl -I` 测 `/generate` 可能得到：
@@ -578,7 +586,7 @@ HTTP/1.0 404 File not found
 这不代表生成接口坏了。请使用：
 
 ```bash
-curl -i "http://127.0.0.1:8765/generate?symbol=SH000852" | head -30
+curl -i "http://127.0.0.1:8888/generate?symbol=SH000852" | head -30
 ```
 
 成功时会看到类似：
@@ -616,7 +624,7 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/czsc
-ExecStart=/opt/czsc/.venv/bin/python /opt/czsc/scripts/report_server.py --host 127.0.0.1 --port 8765 --reports-dir /opt/czsc/reports
+ExecStart=/opt/czsc/.venv/bin/python /opt/czsc/scripts/report_server.py --host 127.0.0.1 --port 8888 --reports-dir /opt/czsc/reports
 Restart=always
 RestartSec=5
 User=你的实际用户名
@@ -705,7 +713,7 @@ Ctrl + C
 本机测试：
 
 ```bash
-curl -I http://127.0.0.1:8765/
+curl -I http://127.0.0.1:8888/
 ```
 
 ---
@@ -731,7 +739,7 @@ server {
     auth_basic_user_file /etc/nginx/.czsc_htpasswd;
 
     location / {
-        proxy_pass http://127.0.0.1:8765;
+        proxy_pass http://127.0.0.1:8888;
         proxy_http_version 1.1;
 
         proxy_set_header Host $host;
@@ -874,19 +882,19 @@ SH000852 (中证1000) K线包含处理与分型测试
 确认 Python 服务只监听本机：
 
 ```bash
-ss -lntp | grep 8765
+ss -lntp | grep 8888
 ```
 
 正确结果类似：
 
 ```text
-127.0.0.1:8765
+127.0.0.1:8888
 ```
 
 如果看到：
 
 ```text
-0.0.0.0:8765
+0.0.0.0:8888
 ```
 
 说明服务暴露到了公网，需要检查：
@@ -904,7 +912,7 @@ sudo systemctl cat czsc-report
 公网测试：
 
 ```text
-http://你的公网IP:8765/
+http://你的公网IP:8888/
 ```
 
 应该打不开。
@@ -913,7 +921,7 @@ http://你的公网IP:8765/
 
 ```text
 只开放 22、80
-不开放 8765
+不开放 8888
 ```
 
 ---
@@ -1040,7 +1048,7 @@ sudo systemctl restart czsc-report
 
 ```bash
 sudo systemctl status czsc-report
-curl -I http://127.0.0.1:8765/
+curl -I http://127.0.0.1:8888/
 ```
 
 ---
@@ -1076,14 +1084,14 @@ curl -I http://127.0.0.1
 
 ### 17.2 浏览器显示 502 Bad Gateway
 
-说明 Nginx 能访问，但后端 Python 服务异常。
+说明 Nginx 能访问，但后端 Python 服务异常，或者 Nginx 代理的端口和 Python 服务实际端口不一致。
 
 检查：
 
 ```bash
 sudo systemctl status czsc-report
 sudo journalctl -u czsc-report -n 200 --no-pager
-curl -I http://127.0.0.1:8765/
+curl -I http://127.0.0.1:8888/
 ```
 
 常见原因：
@@ -1092,6 +1100,32 @@ curl -I http://127.0.0.1:8765/
 - Python 虚拟环境路径错误。
 - systemd 里的 `User` 不存在。
 - `/opt/czsc/reports` 没权限。
+- Python 服务实际运行在 `8888`，但 Nginx 仍然 `proxy_pass` 到旧端口。
+
+确认 Python 服务实际端口：
+
+```bash
+sudo systemctl status czsc-report --no-pager
+sudo systemctl cat czsc-report | grep ExecStart
+```
+
+确认 Nginx 代理端口：
+
+```bash
+sudo grep -R "proxy_pass" /etc/nginx/sites-available /etc/nginx/sites-enabled
+```
+
+如果服务日志显示：
+
+```text
+Serving Chan reports at http://127.0.0.1:8888/
+```
+
+则 Nginx 配置必须是：
+
+```nginx
+proxy_pass http://127.0.0.1:8888;
+```
 
 ### 17.3 访问时一直要求账号密码
 
@@ -1104,9 +1138,22 @@ sudo ls -l /etc/nginx/.czsc_htpasswd
 重新设置密码：
 
 ```bash
-sudo htpasswd /etc/nginx/.czsc_htpasswd czsc
+sudo htpasswd -c /etc/nginx/.czsc_htpasswd czsc
 sudo nginx -t
 sudo systemctl reload nginx
+```
+
+说明：
+
+- `-c` 表示重新创建密码文件，会覆盖原账号密码。
+- 输入密码时终端不会显示任何字符，这是正常的。
+- 用户名示例是 `czsc`，浏览器登录时用户名也要填 `czsc`。
+- 如果浏览器一直记住旧密码，可以开无痕窗口重新访问。
+
+也可以用下面形式让浏览器重新弹出密码框：
+
+```text
+http://czsc@你的公网IP/
 ```
 
 ### 17.4 生成报告失败
@@ -1230,7 +1277,7 @@ sudo systemctl restart czsc-report
 如果执行：
 
 ```bash
-curl -I "http://127.0.0.1:8765/generate?symbol=SH000852"
+curl -I "http://127.0.0.1:8888/generate?symbol=SH000852"
 ```
 
 看到：
@@ -1244,7 +1291,7 @@ HTTP/1.0 404 File not found
 改用：
 
 ```bash
-curl -i "http://127.0.0.1:8765/generate?symbol=SH000852" | head -30
+curl -i "http://127.0.0.1:8888/generate?symbol=SH000852" | head -30
 ```
 
 ### 17.7 `nginx -t` 报 sites-enabled 文件不存在
@@ -1279,7 +1326,54 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-### 17.8 `git pull` 报 GnuTLS recv error
+### 17.8 `nginx -t` 报 listen directive is not allowed here
+
+如果看到：
+
+```text
+"listen" directive is not allowed here in /etc/nginx/sites-enabled/czsc-report:1
+```
+
+说明 Nginx 站点配置文件写坏了，通常是文件第 1 行直接写了 `listen 80;`，但 `listen` 必须放在 `server { ... }` 里面。
+
+最稳妥的修复方式是重写完整配置：
+
+```bash
+sudo tee /etc/nginx/sites-available/czsc-report > /dev/null <<'EOF'
+server {
+    listen 80;
+    server_name _;
+
+    auth_basic "CZSC Report";
+    auth_basic_user_file /etc/nginx/.czsc_htpasswd;
+
+    location / {
+        proxy_pass http://127.0.0.1:8888;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_connect_timeout 600s;
+        proxy_send_timeout 600s;
+        proxy_read_timeout 600s;
+    }
+}
+EOF
+```
+
+重新创建软链接并检查：
+
+```bash
+sudo rm -f /etc/nginx/sites-enabled/czsc-report
+sudo ln -s /etc/nginx/sites-available/czsc-report /etc/nginx/sites-enabled/czsc-report
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+### 17.9 `git pull` 报 GnuTLS recv error
 
 如果看到：
 
@@ -1306,7 +1400,7 @@ tar -xzf /tmp/czsc.tar.gz -C /opt/czsc --strip-components=1
 cd /opt/czsc
 ```
 
-### 17.9 服务器重启后服务没恢复
+### 17.10 服务器重启后服务没恢复
 
 检查 systemd 是否启用：
 
@@ -1335,7 +1429,7 @@ sudo systemctl status nginx
 部署完成后逐项确认：
 
 ```text
-[ ] 腾讯云防火墙只开放 22、80，没有开放 8765
+[ ] 腾讯云防火墙只开放 22、80，没有开放 8888
 [ ] /opt/czsc 存在代码
 [ ] /opt/czsc/scripts/report_server.py 存在
 [ ] /opt/czsc/.venv 存在
@@ -1346,7 +1440,7 @@ sudo systemctl status nginx
 [ ] 登录后默认生成上证指数
 [ ] 左上角可以选择 8 个标的
 [ ] 中证1000 显示 SH000852 (中证1000)
-[ ] http://公网IP:8765/ 不可访问
+[ ] http://公网IP:8888/ 不可访问
 [ ] reboot 后服务自动恢复
 ```
 
@@ -1389,3 +1483,317 @@ http://你的公网IP/
 - 后台任务队列和进度轮询。
 - 用正式登录页面替代 Basic Auth。
 - Docker 化部署。
+
+---
+
+## 20. 追加部署 czsc-pro 交互图表服务
+
+本章节用于把当前 `/Users/josan/Desktop/czsc-pro` 项目的交互式缠论图表服务也部署到同一台腾讯云轻量应用服务器上。
+
+这个服务和前面的 `czsc-report` 是两个独立服务：
+
+```text
+已有服务：
+Nginx :80 /
+  -> report_server.py :127.0.0.1:8888
+  -> /opt/czsc
+
+新增服务：
+Nginx :80 /chan-chart/
+  -> web_server.py :127.0.0.1:8899
+  -> /opt/czsc-pro
+```
+
+新增服务的访问入口：
+
+```text
+http://你的公网IP/chan-chart/
+```
+
+注意：
+
+- 不要改动已有 `czsc-report.service`。
+- 不要开放公网 `8899` 端口。
+- 新服务仍然走 Nginx 80 端口和已有 Basic Auth。
+- 新服务默认使用通达信 `mootdx` 1分钟数据源。
+
+### 20.1 上传或拉取当前项目代码
+
+服务器上创建目录：
+
+```bash
+sudo mkdir -p /opt
+sudo chown -R "$DEPLOY_USER:$DEPLOY_USER" /opt
+```
+
+如果当前项目已经推到 GitHub，直接在服务器拉取：
+
+```bash
+git clone <你的 czsc-pro 仓库地址> /opt/czsc-pro
+cd /opt/czsc-pro
+```
+
+如果当前项目还没有推到 GitHub，可以从本地同步到服务器：
+
+```bash
+rsync -av --exclude '.git' --exclude '.venv' --exclude '__pycache__' \
+  /Users/josan/Desktop/czsc-pro/ \
+  lighthouse@你的公网IP:/opt/czsc-pro/
+```
+
+同步后在服务器检查关键文件：
+
+```bash
+cd /opt/czsc-pro
+ls -lh web_server.py
+ls -lh Plot/HtmlPlotDriver.py
+ls -lh DataAPI/MootdxAPI.py
+```
+
+### 20.2 创建 Python 虚拟环境
+
+```bash
+cd /opt/czsc-pro
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+```
+
+安装依赖：
+
+```bash
+python -m pip install -r Script/requirements.txt
+python -m pip install mootdx requests pandas matplotlib numpy
+```
+
+如果下载慢，使用清华源：
+
+```bash
+python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r Script/requirements.txt
+python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple mootdx requests pandas matplotlib numpy
+```
+
+验证依赖：
+
+```bash
+/opt/czsc-pro/.venv/bin/python -c "import mootdx, requests, pandas, matplotlib, numpy; print('ok')"
+```
+
+Python 版本要求：
+
+```bash
+python --version
+```
+
+建议使用 Python 3.10 或 3.11。当前 `czsc-pro` 已兼容 Python 3.10。
+
+如果启动时报：
+
+```text
+ImportError: cannot import name 'Self' from 'typing'
+```
+
+说明服务器上的 `/opt/czsc-pro` 还是旧代码。需要重新同步最新代码，至少包含这些文件：
+
+```text
+Combiner/KLine_Combiner.py
+Seg/Eigen.py
+Seg/Seg.py
+```
+
+同步后重新启动：
+
+```bash
+sudo systemctl restart czsc-chart
+```
+
+### 20.3 前台手动验证服务
+
+先以前台方式启动：
+
+```bash
+cd /opt/czsc-pro
+source .venv/bin/activate
+
+python web_server.py \
+  --host 127.0.0.1 \
+  --port 8899
+```
+
+再开一个 SSH 窗口测试首页：
+
+```bash
+curl -i http://127.0.0.1:8899/ | head -30
+```
+
+正常应返回：
+
+```text
+HTTP/1.0 200 OK
+```
+
+测试默认上证指数 1分钟图：
+
+```bash
+curl -o /tmp/chan-chart.html \
+  "http://127.0.0.1:8899/chart?code=SH000001&lv=1m&days=5&source=mootdx"
+
+ls -lh /tmp/chan-chart.html
+```
+
+如果 HTML 文件有几百 KB，说明图表生成成功。
+
+验证完成后，回到前台服务窗口按：
+
+```text
+Ctrl + C
+```
+
+### 20.4 创建 systemd 服务
+
+确认当前部署用户：
+
+```bash
+echo "$DEPLOY_USER"
+```
+
+如果没有输出，先设置：
+
+```bash
+export DEPLOY_USER="$(whoami)"
+```
+
+创建服务文件：
+
+```bash
+sudo tee /etc/systemd/system/czsc-chart.service >/dev/null <<EOF
+[Unit]
+Description=CZSC Pro Interactive Chan Chart Service
+After=network.target
+
+[Service]
+Type=simple
+User=$DEPLOY_USER
+WorkingDirectory=/opt/czsc-pro
+ExecStart=/opt/czsc-pro/.venv/bin/python /opt/czsc-pro/web_server.py --host 127.0.0.1 --port 8899
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+
+生成后检查：
+
+```bash
+cat /etc/systemd/system/czsc-chart.service
+```
+
+确认 `User=` 是你的实际用户，例如：
+
+```ini
+User=lighthouse
+User=ubuntu
+```
+
+启动服务：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable czsc-chart
+sudo systemctl start czsc-chart
+sudo systemctl status czsc-chart
+```
+
+如果状态不是 `active (running)`，查看日志：
+
+```bash
+journalctl -u czsc-chart -n 100 --no-pager
+```
+
+### 20.5 配置 Nginx 路径转发
+
+编辑当前站点配置。常见路径是：
+
+```bash
+sudo nano /etc/nginx/sites-available/default
+```
+
+在已有 `server { ... }` 里面增加一个 location：
+
+```nginx
+location /chan-chart/ {
+    proxy_pass http://127.0.0.1:8899;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_read_timeout 300;
+}
+```
+
+说明：
+
+- 浏览器访问 `/chan-chart/`。
+- `proxy_pass http://127.0.0.1:8899;` 会保留 `/chan-chart/` 前缀转发；新版 `web_server.py` 已兼容这个前缀。
+- 如果你已经配置成 `proxy_pass http://127.0.0.1:8899/;` 也可以，新版 `web_server.py` 同时兼容剥掉前缀后的 `/`。
+- 旧服务 `/` 仍然保持原来的转发，不受影响。
+
+检查并重载 Nginx：
+
+```bash
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+### 20.6 浏览器验证
+
+浏览器访问：
+
+```text
+http://你的公网IP/chan-chart/
+```
+
+预期行为：
+
+- 页面顶部显示“缠论图表服务”。
+- 快捷按钮显示股票/指数名称，而不是代码。
+- 默认加载“上证指数”。
+- 可以手动输入 `000001.SZ` 查询平安银行。
+- 也可以输入 `SH000001` 查询上证指数。
+- 图表支持滚轮缩放、拖拽平移、双击十字星和悬停 OHLC。
+
+命令行验证：
+
+```bash
+curl -I http://127.0.0.1:8899/
+curl -I http://你的公网IP/chan-chart/
+```
+
+如果公网访问失败，依次检查：
+
+```bash
+sudo systemctl status czsc-chart
+sudo systemctl status nginx
+sudo nginx -t
+journalctl -u czsc-chart -n 100 --no-pager
+```
+
+### 20.7 新服务验收清单
+
+```text
+[ ] /opt/czsc-pro 存在代码
+[ ] /opt/czsc-pro/web_server.py 存在
+[ ] /opt/czsc-pro/.venv 存在
+[ ] /opt/czsc-pro/.venv/bin/python -c "import mootdx" 成功
+[ ] curl http://127.0.0.1:8899/ 返回 200
+[ ] curl "http://127.0.0.1:8899/chart?code=SH000001&lv=1m&days=5&source=mootdx" 可以生成 HTML
+[ ] systemctl status czsc-chart 是 active (running)
+[ ] Nginx 已添加 /chan-chart/ 反向代理
+[ ] http://公网IP/chan-chart/ 可以访问
+[ ] 快捷按钮显示股票名称，不直接显示代码
+[ ] 8899 没有在腾讯云防火墙中开放
+[ ] reboot 后 czsc-chart 和 nginx 自动恢复
+```

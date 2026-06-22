@@ -1,0 +1,297 @@
+#!/usr/bin/env python3
+"""Generate the local help page for fractal and pen drawing logic."""
+from datetime import datetime
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+OUT = ROOT / "reports" / "help" / "fractal_pen_logic.html"
+
+
+def main():
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    html = f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>分型、笔与图形绘制逻辑说明</title>
+  <style>
+    :root {{ --ink:#20242a; --muted:#667085; --line:#d9dee7; --bg:#f6f7f9; --panel:#fff; --accent:#1f6f8b; --warn:#912018; }}
+    * {{ box-sizing:border-box; }}
+    body {{ margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:var(--ink); background:var(--bg); line-height:1.68; }}
+    header {{ background:#fff; border-bottom:1px solid var(--line); padding:28px clamp(18px,4vw,48px); }}
+    main {{ width:min(1180px,100%); margin:0 auto; padding:24px; }}
+    h1 {{ margin:0 0 8px; font-size:clamp(26px,4vw,40px); }}
+    h2 {{ margin:0 0 14px; font-size:22px; }}
+    h3 {{ margin:20px 0 8px; font-size:17px; }}
+    p {{ margin:8px 0; }}
+    a {{ color:var(--accent); }}
+    code {{ background:#eef4ff; color:#1849a9; padding:1px 5px; border-radius:4px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.92em; }}
+    section {{ background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:22px; margin-bottom:18px; }}
+    .sub {{ color:var(--muted); }}
+    .toc {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:8px 18px; margin:12px 0 0; padding-left:18px; }}
+    .toc a {{ text-decoration:none; }}
+    .flow {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:10px; }}
+    .step {{ border:1px solid var(--line); border-radius:8px; padding:12px; background:#fbfcfe; }}
+    .step strong {{ display:block; margin-bottom:4px; color:#163b56; }}
+    table {{ width:100%; border-collapse:collapse; font-size:14px; }}
+    th,td {{ border-bottom:1px solid var(--line); padding:8px 10px; text-align:left; vertical-align:top; }}
+    th {{ background:#f2f4f7; font-weight:700; }}
+    ul,ol {{ margin:8px 0; padding-left:22px; }}
+    li {{ margin:5px 0; }}
+    .note {{ color:var(--muted); font-size:14px; }}
+    .warn {{ color:var(--warn); }}
+    .kbd {{ display:inline-block; border:1px solid var(--line); border-bottom-width:2px; border-radius:4px; padding:0 5px; background:#fff; font-size:12px; }}
+    .formula {{ background:#fbfcfe; border:1px solid var(--line); border-radius:8px; padding:12px 14px; overflow:auto; }}
+    .badge {{ display:inline-block; border-radius:999px; background:#e8f6fb; color:#175cd3; padding:2px 8px; font-size:12px; font-weight:700; }}
+  </style>
+</head>
+<body>
+<header>
+  <p><a href="/">返回主页</a></p>
+  <h1>分型、笔与图形绘制逻辑说明</h1>
+  <div class="sub">生成时间：{now} ｜ 对应代码：<code>scripts/analyze_chan_points.py</code></div>
+</header>
+<main>
+<section>
+  <h2>用途</h2>
+  <p>这份文档解释当前报告中“分型为什么有效或被过滤”“笔为什么连成这样”“图上的三角、虚线框和折线从哪里来”。它描述的是当前代码实际执行的逻辑，方便区分：问题来自定义本身，还是来自代码实现。</p>
+  <ul class="toc">
+    <li><a href="#pipeline">总流程</a></li>
+    <li><a href="#merge">1. K 线包含处理</a></li>
+    <li><a href="#candidate">2. 分型候选识别</a></li>
+    <li><a href="#filter">3. 分型过滤与保留</a></li>
+    <li><a href="#gap">4. 反向缺口保护</a></li>
+    <li><a href="#pens">5. 笔的构造</a></li>
+    <li><a href="#draw">6. 图形绘制</a></li>
+    <li><a href="#tables">7. 表格备注来源</a></li>
+    <li><a href="#pitfalls">8. 常见疑点</a></li>
+  </ul>
+</section>
+
+<section id="pipeline">
+  <h2>总流程</h2>
+  <div class="flow">
+    <div class="step"><strong>原始 K 线</strong>来自行情源，分钟级报告通常使用 1 分钟 K 线。</div>
+    <div class="step"><strong>包含处理</strong>调用 <code>merge_containing_bars</code>，合并存在包含关系的 K 线。</div>
+    <div class="step"><strong>候选分型</strong>调用 <code>find_fractal_candidates</code>，在包含处理后的 K 线上找三根 K 线形态。</div>
+    <div class="step"><strong>分型过滤</strong>调用 <code>filter_fractals_by_occupied_bars</code>，处理间隔、同类极值、区间重叠、反向缺口等规则。</div>
+    <div class="step"><strong>有效分型</strong><code>find_fractals</code> 只返回 <code>valid=True</code> 的分型。</div>
+    <div class="step"><strong>构造笔</strong>调用 <code>build_pens</code>，按有效分型顶底交替连接。</div>
+    <div class="step"><strong>绘图</strong>调用 <code>_make_svg_chart</code>，画 K 线、候选分型、有效笔和交互高亮。</div>
+  </div>
+  <p class="note">报告里的“原始分型列表”实际展示的是“候选分型列表”，包含有效和已过滤两类；图上也会同时画出有效和过滤分型，便于对照。</p>
+</section>
+
+<section id="merge">
+  <h2>1. K 线包含处理</h2>
+  <p>函数：<code>merge_containing_bars(bars)</code></p>
+  <p>处理对象是原始 K 线。相邻两根 K 线如果存在包含关系，则合并成一根处理后的 K 线。</p>
+  <div class="formula">
+    <p><strong>包含关系：</strong></p>
+    <p><code>新K.high <= 前K.high 且 新K.low >= 前K.low</code>，或 <code>前K.high <= 新K.high 且 前K.low >= 新K.low</code></p>
+  </div>
+  <table>
+    <thead><tr><th>方向判断</th><th>合并方式</th><th>备注显示</th></tr></thead>
+    <tbody>
+      <tr><td>如果当前处理后的最后一根 K 线高点不低于再前一根，认为向上处理。</td><td>最高取两者较高，最低也取两者较高，即“高高”。</td><td>显示“向上处理：取高高”。</td></tr>
+      <tr><td>否则认为向下处理。</td><td>最高取两者较低，最低也取两者较低，即“低低”。</td><td>显示“向下处理：取低低”。</td></tr>
+    </tbody>
+  </table>
+  <p>被包含处理掉的原始 K 线日期会记录到 <code>absorbed_dates</code>，图上用浅红虚线框标出来，表格里放在“被处理日期/处理过程”。</p>
+</section>
+
+<section id="candidate">
+  <h2>2. 分型候选识别</h2>
+  <p>函数：<code>find_fractal_candidates(merged)</code></p>
+  <p>候选分型只在“包含处理后的 K 线”上识别。每个候选分型以三根连续的处理后 K 线为形态窗口：左 K、中 K、右 K。</p>
+  <table>
+    <thead><tr><th>类型</th><th>成立条件</th><th>分型价格</th><th>区间高低</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>顶分型</td>
+        <td>中 K 的高点高于左右 K 的高点，且中 K 的低点也高于左右 K 的低点。</td>
+        <td><code>price = 中K.high</code></td>
+        <td><code>high = 中K.high</code>；<code>low = min(左K.low, 右K.low)</code></td>
+      </tr>
+      <tr>
+        <td>底分型</td>
+        <td>中 K 的低点低于左右 K 的低点，且中 K 的高点也低于左右 K 的高点。</td>
+        <td><code>price = 中K.low</code></td>
+        <td><code>high = max(左K.high, 右K.high)</code>；<code>low = 中K.low</code></td>
+      </tr>
+    </tbody>
+  </table>
+  <p>候选分型会按 <code>(index, bottom优先/top其次)</code> 排序。因此同一根中 K 极少数情况下若同时满足条件，底分型会排在顶分型之前。</p>
+  <p class="warn">重要：这里形成的是“候选形态”，还不是最终有效分型。候选进入下一步过滤后，才决定是否有效。</p>
+</section>
+
+<section id="filter">
+  <h2>3. 分型过滤与保留</h2>
+  <p>函数：<code>filter_fractals_by_occupied_bars(candidates, merged, raw_bars)</code></p>
+  <p>这个函数是当前争议最多、也最关键的部分。它逐个扫描候选分型，维护一个有效分型序列 <code>pivots</code>。每个候选分型都会写入 <code>process_notes</code>，最后展示到原始分型列表的“备注”。</p>
+
+  <h3>3.1 首个候选</h3>
+  <p>如果有效序列为空，第一个候选直接作为首个有效分型保留。</p>
+
+  <h3>3.2 只和前一个有效分型检查占用区间</h3>
+  <p>当前规则只拿“当前候选”与“前一个有效分型”检查是否共用 K 线或中间独立 K 线不足。已过滤的原始候选不参与这个间隔检查。</p>
+  <div class="formula">
+    <p>前一有效分型占用区间：<code>[last.index - 1, last.index + 1]</code></p>
+    <p>当前候选占用区间：<code>[p.index - 1, p.index + 1]</code></p>
+    <p>代码判定：<code>curr_start &lt; last_end + 2</code> 时，认为“占用区间重叠，或中间不足 1 根独立 K 线”。</p>
+  </div>
+  <p>如果不满足间隔要求，默认舍弃当前分型；但如果当前分型有反向缺口保护，则仍会保留。</p>
+
+  <h3>3.3 相邻同类分型：顶取更高，底取更低</h3>
+  <table>
+    <thead><tr><th>场景</th><th>当前更极端</th><th>当前不更极端</th><th>额外释放 K 线检查</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>顶分型后又出现顶分型</td>
+        <td>后一个顶更高，则替换前一个顶。</td>
+        <td>后一个顶不高于前一个顶，则舍弃后一个顶。</td>
+        <td>更高顶替换旧顶后，调用 <code>maybe_promote_released_bottom</code>，检查释放区间是否能形成更低底分型。</td>
+      </tr>
+      <tr>
+        <td>底分型后又出现底分型</td>
+        <td>后一个底更低，则替换前一个底。</td>
+        <td>后一个底不低于前一个底，则舍弃后一个底。</td>
+        <td>更低底替换旧底后，调用 <code>maybe_promote_released_top</code>，检查释放区间是否能形成更高顶分型。</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>释放 K 线检查的目的：当前一个同类分型被替换后，它占用的 K 线不再锁定，有可能让中间某个反向候选变成新的有效分型。代码会在释放区间里找更极端的反向分型，并与前一个有效反向分型比较。</p>
+
+  <h3>3.4 相邻反向分型：先检查价格区间是否重叠</h3>
+  <table>
+    <thead><tr><th>前一有效</th><th>当前候选</th><th>不重叠条件</th><th>重叠时</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>底分型</td>
+        <td>顶分型</td>
+        <td>当前顶分型的最低点 <code>p.low</code> 必须高于前一底分型最高点 <code>last.high</code>。</td>
+        <td>如果 <code>p.low <= last.high</code>，则当前顶要和上一个顶分型比较。</td>
+      </tr>
+      <tr>
+        <td>顶分型</td>
+        <td>底分型</td>
+        <td>当前底分型的最高点 <code>p.high</code> 必须低于前一顶分型最低点 <code>last.low</code>。</td>
+        <td>如果 <code>p.high >= last.low</code>，则当前底要和上一个底分型比较。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>3.5 区间重叠后的同类比较</h3>
+  <p>重叠发生后，代码先找上一个同类分型。</p>
+  <ul>
+    <li>如果没有上一个同类分型：没有反向缺口保护则舍弃当前分型；有反向缺口保护则保留。</li>
+    <li>如果当前顶分型高于上一个顶分型，或当前底分型低于上一个底分型，则触发 <code>replace_with_overlap_extreme</code>。</li>
+    <li>否则舍弃当前分型。</li>
+  </ul>
+  <p><code>replace_with_overlap_extreme</code> 的当前做法：在相邻两个反向分型中删除较弱者，然后把当前分型放入有效序列，再调用 <code>normalize_same_kind_neighbors</code> 向左归并可能出现的相邻同类分型。</p>
+
+  <h3>3.6 同类极值向前归并</h3>
+  <p>函数：<code>normalize_same_kind_neighbors(anchor)</code></p>
+  <p>当删除一个反向分型后，序列中可能出现“顶-顶”或“底-底”相邻。此时循环向左处理：</p>
+  <ul>
+    <li>顶分型相邻：保留高点/价格更高者。</li>
+    <li>底分型相邻：保留低点/价格更低者。</li>
+    <li>胜出的分型继续向左比较，直到遇到反向分型或序列起点。</li>
+  </ul>
+</section>
+
+<section id="gap">
+  <h2>4. 反向缺口保护</h2>
+  <p>参数：<code>REVERSE_GAP_THRESHOLD = 0.006</code>，也就是 0.6%。</p>
+  <p>缺口判断基于“未做包含处理前的原始相邻 K 线”，不是包含处理后的 K 线。</p>
+  <table>
+    <thead><tr><th>类型</th><th>定义</th><th>代码函数</th></tr></thead>
+    <tbody>
+      <tr><td>向下缺口</td><td>前一原始 K 线最低点高于后一原始 K 线最高点，且差值超过前一最低点的 0.6%。</td><td><code>has_down_gap</code></td></tr>
+      <tr><td>向上缺口</td><td>后一原始 K 线最低点高于前一原始 K 线最高点，且差值超过前一最高点的 0.6%。</td><td><code>has_up_gap</code></td></tr>
+      <tr><td>反向缺口</td><td>前一个分型是顶，后面出现向下缺口；前一个分型是底，后面出现向上缺口。</td><td><code>reverse_gap_preserve_reason</code> / <code>reverse_gap_from_previous_reason</code></td></tr>
+    </tbody>
+  </table>
+  <p>如果一个候选原本会因为间隔不足、没有同类可比或区间重叠被过滤，但它包含反向缺口保护，代码会倾向保留，并在备注里写出缺口日期和比例。</p>
+  <p class="warn">同类分型比较时，反向缺口不会放宽“顶取更高、底取更低”的规则。</p>
+</section>
+
+<section id="pens">
+  <h2>5. 笔的构造</h2>
+  <p>函数：<code>build_pens(fractals, min_gap=2, ...)</code></p>
+  <p>输入只使用过滤后的有效分型，也就是 <code>find_fractals</code> 返回的 <code>valid=True</code> 分型。</p>
+  <table>
+    <thead><tr><th>步骤</th><th>规则</th><th>备注</th></tr></thead>
+    <tbody>
+      <tr><td>首个分型</td><td>直接放入笔端点序列。</td><td>还不形成笔。</td></tr>
+      <tr><td>遇到同类分型</td><td>顶分型取更高，底分型取更低。</td><td>更极端者会替换当前最后一个端点。</td></tr>
+      <tr><td>遇到反向分型</td><td>计算 <code>gap = p.index - last.index</code>。</td><td>默认 <code>min_gap=3</code>，来自命令行参数 <code>--min-pivot-gap</code> 的默认值。</td></tr>
+      <tr><td>间隔不足</td><td>如果 <code>gap < min_gap</code> 且两端之间没有方向性缺口，则跳过。</td><td>方向性缺口由 <code>has_directional_gap_between</code> 判断。</td></tr>
+      <tr><td>间隔通过</td><td>顶底交替且间隔通过，则追加为新的笔端点。</td><td>图上会连接相邻有效端点。</td></tr>
+    </tbody>
+  </table>
+  <p>当前代码没有额外使用涨跌幅过滤，因为 <code>min_swing_pct</code> 默认是 0，实际构造里也没有再按该参数过滤。</p>
+</section>
+
+<section id="draw">
+  <h2>6. 图形绘制</h2>
+  <p>函数：<code>_make_svg_chart(...)</code></p>
+  <p>图形是内联 SVG。坐标以当前级别的原始 K 线为横轴，价格为纵轴。</p>
+  <table>
+    <thead><tr><th>图形元素</th><th>来源</th><th>绘制规则</th></tr></thead>
+    <tbody>
+      <tr><td>K 线</td><td>原始 K 线 <code>bars</code></td><td>红色表示收盘不低于开盘，蓝色表示收盘低于开盘。</td></tr>
+      <tr><td>被包含处理 K 线虚线框</td><td><code>merged_bars[].absorbed_dates</code></td><td>凡是被包含处理掉的原始 K 线，都叠加浅红虚线框。</td></tr>
+      <tr><td>有效顶分型</td><td>候选分型里 <code>kind=top</code> 且 <code>valid=True</code></td><td>蓝色实心倒三角 ▼，标在分型价格处。</td></tr>
+      <tr><td>过滤顶分型</td><td><code>kind=top</code> 且 <code>valid=False</code></td><td>蓝色虚线空心倒三角。</td></tr>
+      <tr><td>有效底分型</td><td><code>kind=bottom</code> 且 <code>valid=True</code></td><td>橙色实心正三角 ▲，标在分型价格处。</td></tr>
+      <tr><td>过滤底分型</td><td><code>kind=bottom</code> 且 <code>valid=False</code></td><td>橙色虚线空心正三角。</td></tr>
+      <tr><td>笔</td><td><code>pens</code> 中相邻有效分型端点</td><td>从前一端点价格连到后一端点价格；上涨为绿色，下跌为红色。</td></tr>
+    </tbody>
+  </table>
+  <p>点击分型或备注里的时间，会在图上把该分型占用的处理后 K 线及其包含的原始 K 线用虚线框高亮。点击“清理”按钮可以清掉新增虚线框。</p>
+  <p>滚轮可以缩放，拖拽可以平移，双击切换十字光标，重置按钮恢复默认视图。</p>
+</section>
+
+<section id="tables">
+  <h2>7. 表格备注来源</h2>
+  <p>原始分型列表的“备注”列来自 <code>Pivot.process_notes</code>。每个候选分型从识别开始，到过滤、保留、替换、归并，都会追加说明。</p>
+  <table>
+    <thead><tr><th>字段</th><th>用途</th></tr></thead>
+    <tbody>
+      <tr><td><code>filter_reason</code></td><td>当前分型被过滤的主原因。</td></tr>
+      <tr><td><code>preserve_reason</code></td><td>当前分型被反向缺口保护保留的原因。</td></tr>
+      <tr><td><code>replaced_reason</code></td><td>当前分型因同类极值或释放 K 线逻辑被替换的原因。</td></tr>
+      <tr><td><code>note_reason</code></td><td>当前分型虽然有效，但有额外处理背景，例如同类归并后保留。</td></tr>
+      <tr><td><code>process_notes</code></td><td>最终展示用的完整处理过程列表；如果为空，页面会用上面几个字段兜底。</td></tr>
+    </tbody>
+  </table>
+  <p>笔列表的备注来自 <code>PenStep.check</code> 以及最终笔序列对照。一个候选笔如果中途被接受，但最终没有留在 <code>pens</code> 相邻端点中，会显示为已过滤，并尽量说明是否被后续同类极值替换。</p>
+</section>
+
+<section id="pitfalls">
+  <h2>8. 常见疑点</h2>
+  <h3>为什么图上有些分型画了虚线三角？</h3>
+  <p>它们是候选分型，但被过滤掉了。保留它们是为了人工校验过滤逻辑，不代表有效分型。</p>
+  <h3>为什么表格说“原始分型列表”，但不是原始 K 线直接识别？</h3>
+  <p>这里的“原始”是相对“有效分型”而言，实际候选是在包含处理后的 K 线上识别出来的。未做包含处理的原始 K 线主要用于缺口判断和图上展示。</p>
+  <h3>为什么两个分型看起来很近，但代码说间隔通过或不通过？</h3>
+  <p>间隔判断用的是包含处理后 K 线的 <code>index</code>，不是图上像素距离，也不是原始 K 线数量。图上原始 K 线密集时，视觉距离可能产生误导。</p>
+  <h3>为什么某个有效分型的备注也很多？</h3>
+  <p>有效分型不代表一路无争议。只要它经历过同类替换、区间重叠、释放 K 线或缺口保护，备注都会记录处理过程。</p>
+  <h3>为什么某条笔不是连接我肉眼看到的最近顶底？</h3>
+  <p>笔只连接 <code>build_pens</code> 最终保留的有效分型端点。已过滤候选虽然在图上可见，但不会参与笔连接。</p>
+</section>
+</main>
+</body>
+</html>
+"""
+    OUT.write_text(html, encoding="utf-8")
+    print(OUT)
+
+
+if __name__ == "__main__":
+    main()
